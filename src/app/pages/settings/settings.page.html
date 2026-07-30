@@ -1,0 +1,44 @@
+<ion-content class="settings-content">
+  <div class="settings-wrap">
+    <h1>Kiosk Settings</h1>
+
+    <section class="section">
+      <h2>Network</h2>
+      <button #focusRow class="focus-row" (click)="openWifiSettings()">
+        Open Wi-Fi settings
+      </button>
+    </section>
+
+    <section class="section">
+      <h2>Assigned URL override</h2>
+      <input
+        class="url-input"
+        type="text"
+        [(ngModel)]="urlInput"
+        placeholder="https://example.com"
+        autocapitalize="none"
+        autocorrect="off"
+      />
+      <div class="button-row">
+        <button #focusRow class="focus-row" (click)="saveUrlOverride()">Save override</button>
+        <button #focusRow class="focus-row" (click)="clearUrlOverride()">Clear override</button>
+      </div>
+      @if (savedMessage) {
+        <p class="saved-message">{{ savedMessage }}</p>
+      }
+    </section>
+
+    <section class="section">
+      <h2>Device info</h2>
+      <p class="info-line">Hostname: {{ appState.hostname() }}</p>
+      <p class="info-line">Device ID: {{ appState.creds()?.deviceId }}</p>
+      <p class="info-line">Server: {{ appState.serverUrl }}</p>
+      <p class="info-line">Platform: {{ deviceInfo.platform }}</p>
+      <p class="info-line">Screen: {{ deviceInfo.screenWidth }}×{{ deviceInfo.screenHeight }}</p>
+    </section>
+
+    <button #focusRow class="focus-row close-row" (click)="close()">
+      Close (return to kiosk)
+    </button>
+  </div>
+</ion-content>

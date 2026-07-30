@@ -1,0 +1,23 @@
+.boot-screen {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: #bbb;
+  padding: 32px;
+  text-align: center;
+  gap: 12px;
+
+  p {
+    font-size: 15px;
+    margin: 4px 0;
+  }
+
+  &.error h2 {
+    color: #ff6b6b;
+    font-size: 22px;
+    font-weight: 700;
+  }
+}

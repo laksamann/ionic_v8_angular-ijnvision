@@ -1,0 +1,97 @@
+.settings-content {
+  --background: #111318;
+  --color: #e2e4e8;
+}
+
+.settings-wrap {
+  padding: 48px;
+  max-width: 720px;
+  margin: 0 auto;
+
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 32px;
+  }
+}
+
+.section {
+  margin-bottom: 32px;
+
+  h2 {
+    color: #9aa0aa;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 12px;
+  }
+}
+
+// The focus ring here is not cosmetic — it's the only visual feedback a
+// remote/keyboard user has for where "cursor" currently is, since there's no
+// mouse pointer on a TV. Keep it high-contrast and always visible.
+.focus-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px 20px;
+  border-radius: 8px;
+  background: #1c1f26;
+  color: #e2e4e8;
+  font-size: 18px;
+  border: 2px solid transparent;
+  margin-bottom: 10px;
+  cursor: pointer;
+
+  &:focus,
+  &:focus-visible {
+    outline: none;
+    border-color: #4d9dff;
+    background: #232837;
+    color: #fff;
+    font-weight: 600;
+  }
+}
+
+.url-input {
+  display: block;
+  width: 100%;
+  background: #1c1f26;
+  color: #fff;
+  font-size: 18px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  border: 2px solid #333844;
+
+  &:focus {
+    outline: none;
+    border-color: #4d9dff;
+  }
+}
+
+.button-row {
+  display: flex;
+  gap: 12px;
+
+  .focus-row {
+    flex: 1;
+    margin-bottom: 0;
+  }
+}
+
+.saved-message {
+  color: #7be08a;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.info-line {
+  color: #c7cad1;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.close-row {
+  margin-top: 8px;
+}

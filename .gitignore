@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.angular/
+android/.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/
+*.log
+
+resources/android/**/*

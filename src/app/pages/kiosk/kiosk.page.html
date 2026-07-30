@@ -1,0 +1,19 @@
+<div class="kiosk-content">
+  @if (loading) {
+    <div class="loading-overlay">
+      <ion-spinner name="crescent" color="light"></ion-spinner>
+    </div>
+  }
+
+  <div class="debug-banner">{{ url }}{{ useIframeFallback ? ' (iframe fallback)' : '' }}</div>
+
+  @if (useIframeFallback) {
+    <iframe
+      #kioskFrame
+      class="kiosk-frame"
+      [src]="safeUrl"
+      (load)="onFrameLoad()"
+      allow="autoplay; fullscreen"
+    ></iframe>
+  }
+</div>
