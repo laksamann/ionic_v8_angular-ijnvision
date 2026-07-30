@@ -6,6 +6,7 @@ import { AppStateService } from '../../services/app-state.service';
 import { StorageService } from '../../services/storage.service';
 import { DeviceInfoService, BasicDeviceInfo } from '../../services/device-info.service';
 import { WifiSettings } from '../../plugins/wifi-settings.plugin';
+import { DeviceName } from '../../plugins/device-name.plugin';
 
 @Component({
   selector: 'app-settings',
@@ -25,6 +26,7 @@ export class SettingsPage implements OnInit {
   urlInput = '';
   savedMessage: string | null = null;
   deviceInfo: BasicDeviceInfo;
+  stableId: string | null = null;
 
   constructor(
     public appState: AppStateService,
@@ -39,6 +41,10 @@ export class SettingsPage implements OnInit {
     // Give the first row focus immediately so a remote's D-pad works the
     // instant this screen opens, without requiring a Tab press first.
     setTimeout(() => this.focusRows?.first?.nativeElement.focus(), 0);
+
+    DeviceName.getStableId()
+      .then(({ id }) => (this.stableId = id))
+      .catch(() => (this.stableId = null)); // plain browser, no native plugin
   }
 
   @HostListener('window:keydown', ['$event'])

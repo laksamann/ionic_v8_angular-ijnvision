@@ -32,6 +32,7 @@
       <h2>Device info</h2>
       <p class="info-line">Hostname: {{ appState.hostname() }}</p>
       <p class="info-line">Device ID: {{ appState.creds()?.deviceId }}</p>
+      <p class="info-line">Stable ID (survives reinstall): {{ stableId ?? 'unavailable' }}</p>
       <p class="info-line">Server: {{ appState.serverUrl }}</p>
       <p class="info-line">Platform: {{ deviceInfo.platform }}</p>
       <p class="info-line">Screen: {{ deviceInfo.screenWidth }}×{{ deviceInfo.screenHeight }}</p>

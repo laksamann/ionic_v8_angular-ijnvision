@@ -17,6 +17,24 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * on API 31+ — deliberately avoided here to skip a runtime permission
  * prompt on a kiosk device).
  */
+/**
+ * Reads two different device-identity signals:
+ *
+ * - getName(): the user-visible device name (Settings.Global.DEVICE_NAME) —
+ *   for display purposes only, NOT unique/stable enough to key a database
+ *   row on (users can rename it, and it's not guaranteed unique across
+ *   units of the same model).
+ *
+ * - getStableId(): Settings.Secure.ANDROID_ID — survives app reinstalls and
+ *   data clears (changes only on factory reset), needs no special
+ *   permission. This is the practical alternative to a hardware MAC
+ *   address: since Android 10, WifiManager.getConnectionInfo().getMacAddress()
+ *   always returns a dummy "02:00:00:00:00:00" for any app that isn't a
+ *   Device Owner or system app — reading it at all would silently produce
+ *   the same fake value for every device, which is worse than not having
+ *   an identifier. ANDROID_ID is Android's own documented recommendation
+ *   for this exact use case.
+ */
 @CapacitorPlugin(name = "DeviceName")
 public class DeviceNamePlugin extends Plugin {
 
@@ -35,6 +53,15 @@ public class DeviceNamePlugin extends Plugin {
 
     JSObject result = new JSObject();
     result.put("name", name);
+    call.resolve(result);
+  }
+
+  @PluginMethod
+  public void getStableId(PluginCall call) {
+    String id = Settings.Secure.getString(getContext().getContentResolver(), Settings.Secure.ANDROID_ID);
+
+    JSObject result = new JSObject();
+    result.put("id", id); // null in the unlikely case the setting is unavailable
     call.resolve(result);
   }
 }

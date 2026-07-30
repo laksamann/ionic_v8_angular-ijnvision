@@ -7,17 +7,14 @@ import android.webkit.WebView;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
-import com.kiosktvapp.DeviceNamePlugin;
-import com.kiosktvapp.KioskWebViewPlugin;
-import com.kiosktvapp.WifiSettingsPlugin;
 
 public class MainActivity extends BridgeActivity {
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
-    registerPlugin(WifiSettingsPlugin.class);
-    registerPlugin(KioskWebViewPlugin.class);
-    registerPlugin(DeviceNamePlugin.class);
+    registerPlugin(com.kiosktvapp.WifiSettingsPlugin.class);
+    registerPlugin(com.kiosktvapp.KioskWebViewPlugin.class);
+    registerPlugin(com.kiosktvapp.DeviceNamePlugin.class);
     super.onCreate(savedInstanceState);
 
     // Internal-network-only deployment with a self-signed/internal-CA cert.

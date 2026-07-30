@@ -22,11 +22,11 @@ export class ApiService {
     this.base = serverUrl.replace(/\/+$/, '');
   }
 
-  async register(hostname: string, appVersion: string): Promise<DeviceCreds> {
+  async register(hostname: string, appVersion: string, mac?: string): Promise<DeviceCreds> {
     const res = await fetch(`${this.base}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hostname, platform: detectPlatform(), appVersion }),
+      body: JSON.stringify({ hostname, platform: detectPlatform(), appVersion, mac }),
     });
     if (!res.ok) throw new Error(`register failed: ${res.status}`);
     return res.json();

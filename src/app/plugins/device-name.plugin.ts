@@ -2,6 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 
 export interface DeviceNamePlugin {
   getName(): Promise<{ name: string }>;
+  getStableId(): Promise<{ id: string | null }>;
 }
 
 /**

@@ -40,8 +40,9 @@ export class AppStateService {
       if (!existing) {
         this.step.set('registering with server');
         host = await this.resolveDeviceHostname();
-        console.log('[kiosk] no stored creds — registering as', host);
-        existing = await this.api.register(host, APP_VERSION);
+        const stableId = await this.resolveStableId();
+        console.log('[kiosk] no stored creds — registering as', host, 'stableId:', stableId);
+        existing = await this.api.register(host, APP_VERSION, stableId ?? undefined);
         console.log('[kiosk] register() succeeded:', existing);
         await this.storage.setCreds(existing);
         await this.storage.setHostname(host);
@@ -101,6 +102,30 @@ export class AppStateService {
       console.log('[kiosk] DeviceName plugin unavailable, using generated hostname:', err);
     }
     return `tv-${Date.now().toString(36)}`;
+  }
+
+  /**
+   * This is what makes re-registration idempotent: if the app's local
+   * storage gets cleared or the app is reinstalled, sending the SAME
+   * stable ID means the server reuses the existing device row (same
+   * config, same history) instead of creating a duplicate that looks like
+   * a brand-new, unconfigured kiosk.
+   *
+   * Uses Settings.Secure.ANDROID_ID, not a hardware MAC address — Android
+   * 10+ blocks normal apps from reading the real Wi-Fi MAC (always returns
+   * a dummy value), so ANDROID_ID is the practical, working alternative.
+   * Returns null on a plain browser (no native plugin) or if unavailable
+   * for any other reason — registration still works, it just won't
+   * survive a data clear/reinstall in that case.
+   */
+  private async resolveStableId(): Promise<string | null> {
+    try {
+      const { id } = await DeviceName.getStableId();
+      return id ?? null;
+    } catch (err) {
+      console.log('[kiosk] getStableId unavailable:', err);
+      return null;
+    }
   }
 
   openSettings(): void {
