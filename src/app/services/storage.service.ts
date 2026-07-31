@@ -8,6 +8,8 @@ const KEYS = {
   urlOverride: 'kiosk:urlOverride',
   hostname: 'kiosk:hostname',
   displayModeId: 'kiosk:displayModeId',
+  zoomOverride: 'kiosk:zoomOverride',
+  rotationDegrees: 'kiosk:rotationDegrees',
 } as const;
 
 @Injectable({ providedIn: 'root' })
@@ -58,5 +60,28 @@ export class StorageService {
   async setDisplayModeId(modeId: number | null): Promise<void> {
     if (modeId !== null) await Preferences.set({ key: KEYS.displayModeId, value: String(modeId) });
     else await Preferences.remove({ key: KEYS.displayModeId });
+  }
+
+  /** A manually-set zoom level (from the settings screen) wins over the
+   * server-assigned zoomLevel config, until cleared — same pattern as
+   * the URL override above. */
+  async getZoomOverride(): Promise<number | null> {
+    const { value } = await Preferences.get({ key: KEYS.zoomOverride });
+    return value ? Number(value) : null;
+  }
+  async setZoomOverride(percent: number | null): Promise<void> {
+    if (percent !== null) await Preferences.set({ key: KEYS.zoomOverride, value: String(percent) });
+    else await Preferences.remove({ key: KEYS.zoomOverride });
+  }
+
+  /** Manual content rotation (0/90/180/270) — persisted so it survives
+   * restarts, since it's set once for however the device is physically
+   * mounted, not something expected to change often. */
+  async getRotationDegrees(): Promise<number> {
+    const { value } = await Preferences.get({ key: KEYS.rotationDegrees });
+    return value ? Number(value) : 0;
+  }
+  async setRotationDegrees(degrees: number): Promise<void> {
+    await Preferences.set({ key: KEYS.rotationDegrees, value: String(degrees) });
   }
 }

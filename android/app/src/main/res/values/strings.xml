@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">IJNVision</string>
-    <string name="title_activity_main">IJNVision</string>
+    <string name="app_name">Vision</string>
+    <string name="title_activity_main">Vision</string>
     <string name="package_name">lm.ijn.kiosktvapp</string>
     <string name="custom_url_scheme">lm.ijn.kiosktvapp</string>
 </resources>

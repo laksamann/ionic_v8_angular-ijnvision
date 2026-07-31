@@ -92,6 +92,23 @@ export class KioskPage implements OnInit, OnDestroy {
       }
     }
 
+    if (!this.useIframeFallback) {
+      // Both are plain Android View transforms (setScaleX/Y, setRotation)
+      // set once here — they're properties of the WebView itself, not the
+      // page content, so they don't get reset by navigation and don't need
+      // re-applying on every page load. Not applicable in iframe fallback
+      // mode: cross-origin iframe content can't have JS injected into it
+      // (irrelevant here anyway, since these are native View transforms,
+      // not JS — but the fallback WebView itself is a different, plain
+      // Capacitor-managed element these don't apply to).
+      try {
+        await KioskWebView.setZoom({ percent: this.appState.zoomLevel() });
+        await KioskWebView.setRotation({ degrees: await this.storage.getRotationDegrees() });
+      } catch (err) {
+        console.log('[kiosk] setZoom/setRotation failed:', err);
+      }
+    }
+
     const creds = this.appState.creds();
     if (!creds) return;
 
@@ -227,10 +244,18 @@ export class KioskPage implements OnInit, OnDestroy {
           await this.reloadDisplay();
           break;
         case 'update_config': {
-          const cfg = command.payload['config'] as { homepage?: string } | undefined;
-          const override = await this.storage.getUrlOverride();
-          if (cfg?.homepage && cfg.homepage !== 'about:blank' && !override) {
+          const cfg = command.payload['config'] as { homepage?: string; zoomLevel?: number } | undefined;
+          const urlOverride = await this.storage.getUrlOverride();
+          if (cfg?.homepage && cfg.homepage !== 'about:blank' && !urlOverride) {
             await this.showUrl(cfg.homepage);
+          }
+
+          const zoomOverride = await this.storage.getZoomOverride();
+          if (cfg?.zoomLevel && zoomOverride === null && !this.useIframeFallback) {
+            this.appState.zoomLevel.set(cfg.zoomLevel);
+            await KioskWebView.setZoom({ percent: cfg.zoomLevel }).catch((err) =>
+              console.log('[kiosk] setZoom (from update_config) failed:', err)
+            );
           }
           break;
         }

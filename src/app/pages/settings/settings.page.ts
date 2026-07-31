@@ -8,6 +8,7 @@ import { DeviceInfoService, BasicDeviceInfo } from '../../services/device-info.s
 import { WifiSettings } from '../../plugins/wifi-settings.plugin';
 import { DeviceName } from '../../plugins/device-name.plugin';
 import { DisplayMode, DisplayModeInfo } from '../../plugins/display-mode.plugin';
+import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
 
 @Component({
   selector: 'app-settings',
@@ -30,6 +31,7 @@ export class SettingsPage implements OnInit {
   stableId: string | null = null;
   displayModes: DisplayModeInfo[] = [];
   pinnedModeId: number | null = null;
+  rotationDegrees = 0;
 
   constructor(
     public appState: AppStateService,
@@ -54,6 +56,7 @@ export class SettingsPage implements OnInit {
       .catch(() => (this.displayModes = [])); // plain browser, no native plugin
 
     this.storage.getDisplayModeId().then((id) => (this.pinnedModeId = id));
+    this.storage.getRotationDegrees().then((degrees) => (this.rotationDegrees = degrees));
   }
 
   @HostListener('window:keydown', ['$event'])
@@ -119,6 +122,52 @@ export class SettingsPage implements OnInit {
     await this.appState.setUrlOverride(null);
     this.urlInput = this.appState.homepage();
     this.flashMessage('Override cleared — back to server-assigned URL.');
+  }
+
+  async zoomIn(): Promise<void> {
+    await this.applyZoom(Math.min(this.appState.zoomLevel() + 10, 300));
+  }
+
+  async zoomOut(): Promise<void> {
+    await this.applyZoom(Math.max(this.appState.zoomLevel() - 10, 30));
+  }
+
+  async resetZoom(): Promise<void> {
+    try {
+      await this.appState.setZoomOverride(null); // clears the pin — reverts to the default;
+      // note: like clearUrlOverride(), this doesn't re-fetch the server's
+      // actual current zoomLevel, it reverts to the hardcoded default. The
+      // real server value re-applies next time this device re-registers or
+      // receives a fresh update_config push.
+      await KioskWebView.setZoom({ percent: this.appState.zoomLevel() });
+      this.flashMessage(`Zoom override cleared — reset to ${this.appState.zoomLevel()}%.`);
+    } catch (err) {
+      console.log('[kiosk] resetZoom failed:', err);
+      this.flashMessage('Could not change zoom on this device.');
+    }
+  }
+
+  private async applyZoom(percent: number): Promise<void> {
+    try {
+      await this.appState.setZoomOverride(percent);
+      await KioskWebView.setZoom({ percent });
+      this.flashMessage(`Zoom set to ${percent}% — remembered across restarts.`);
+    } catch (err) {
+      console.log('[kiosk] applyZoom failed:', err);
+      this.flashMessage('Could not change zoom on this device.');
+    }
+  }
+
+  async setRotation(degrees: number): Promise<void> {
+    try {
+      await KioskWebView.setRotation({ degrees });
+      await this.storage.setRotationDegrees(degrees);
+      this.rotationDegrees = degrees;
+      this.flashMessage(`Rotation set to ${degrees}° — remembered across restarts.`);
+    } catch (err) {
+      console.log('[kiosk] setRotation failed:', err);
+      this.flashMessage('Could not rotate the display on this device.');
+    }
   }
 
   close(): void {

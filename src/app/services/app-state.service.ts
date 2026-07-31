@@ -11,6 +11,7 @@ import type { DeviceCreds, DeviceConfig } from '../models/types';
 const SERVER_URL = 'https://testmobile.ijn.com.my';
 const APP_VERSION = '1.0.0';
 const DEFAULT_HOMEPAGE = 'https://example.com';
+const DEFAULT_ZOOM = 100;
 
 @Injectable({ providedIn: 'root' })
 export class AppStateService {
@@ -20,6 +21,7 @@ export class AppStateService {
   readonly creds = signal<DeviceCreds | null>(null);
   readonly hostname = signal('');
   readonly homepage = signal(DEFAULT_HOMEPAGE);
+  readonly zoomLevel = signal(DEFAULT_ZOOM);
   readonly settingsOpen = signal(false);
   readonly serverUrl = SERVER_URL;
 
@@ -59,16 +61,27 @@ export class AppStateService {
       if (override) {
         console.log('[kiosk] using local URL override:', override);
         this.homepage.set(override);
-      } else {
+      }
+
+      const zoomOverride = await this.storage.getZoomOverride();
+      if (zoomOverride !== null) {
+        console.log('[kiosk] using local zoom override:', zoomOverride);
+        this.zoomLevel.set(zoomOverride);
+      }
+
+      if (!override || zoomOverride === null) {
         try {
           this.step.set('fetching config from server');
           const config: DeviceConfig = await this.api.fetchMyConfig(existing);
           console.log('[kiosk] fetchMyConfig() succeeded:', config);
-          if (config.homepage && config.homepage !== 'about:blank') {
+          if (!override && config.homepage && config.homepage !== 'about:blank') {
             this.homepage.set(config.homepage);
           }
+          if (zoomOverride === null && config.zoomLevel) {
+            this.zoomLevel.set(config.zoomLevel);
+          }
         } catch (cfgErr) {
-          console.log('[kiosk] fetchMyConfig() FAILED, using default homepage:', cfgErr);
+          console.log('[kiosk] fetchMyConfig() FAILED, using defaults:', cfgErr);
         }
       }
       this.step.set('done');
@@ -83,6 +96,11 @@ export class AppStateService {
   async setUrlOverride(url: string | null): Promise<void> {
     await this.storage.setUrlOverride(url);
     this.homepage.set(url ?? DEFAULT_HOMEPAGE);
+  }
+
+  async setZoomOverride(percent: number | null): Promise<void> {
+    await this.storage.setZoomOverride(percent);
+    this.zoomLevel.set(percent ?? DEFAULT_ZOOM);
   }
 
   /**

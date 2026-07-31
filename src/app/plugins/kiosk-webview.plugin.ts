@@ -7,6 +7,11 @@ export interface KioskWebViewPlugin {
   reload(): Promise<void>;
   clearCacheAndReload(): Promise<void>;
   captureScreenshot(): Promise<{ base64: string }>;
+  setZoom(options: { percent: number }): Promise<void>;
+  getZoom(): Promise<{ percent: number }>;
+  /** degrees must be one of 0, 90, 180, 270 */
+  setRotation(options: { degrees: number }): Promise<void>;
+  getRotation(): Promise<{ degrees: number }>;
   addListener(
     eventName: 'pageLoadStart' | 'pageLoadFinished',
     listenerFunc: (data: { url: string }) => void

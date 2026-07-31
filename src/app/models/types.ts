@@ -47,6 +47,7 @@ export interface DeviceConfig {
   showCursor: boolean;
   takeScreenshotEverySeconds: number | null;
   autoUpdate: boolean;
+  zoomLevel: number;
 }
 
 export type WSMessage =
