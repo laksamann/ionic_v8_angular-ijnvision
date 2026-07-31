@@ -2,6 +2,7 @@ import { Injectable, signal } from '@angular/core';
 import { StorageService } from './storage.service';
 import { ApiService } from './api.service';
 import { DeviceName } from '../plugins/device-name.plugin';
+import { DisplayMode } from '../plugins/display-mode.plugin';
 import type { DeviceCreds, DeviceConfig } from '../models/types';
 
 // Point this at your Fastify server. In production, consider prompting for
@@ -32,6 +33,8 @@ export class AppStateService {
   async initialize(): Promise<void> {
     try {
       console.log('[kiosk] starting, server =', SERVER_URL);
+      await this.applyDisplayMode();
+
       this.step.set('checking stored credentials');
       let existing = await this.storage.getCreds();
       let host = await this.storage.getHostname();
@@ -125,6 +128,27 @@ export class AppStateService {
     } catch (err) {
       console.log('[kiosk] getStableId unavailable:', err);
       return null;
+    }
+  }
+
+  /**
+   * Applies either a manually-pinned display mode (set from the settings
+   * screen) or auto-selects the highest resolution the connected TV
+   * reports supporting over HDMI. Runs once at boot — this plugin call is
+   * Android-only, so it silently no-ops on a plain browser.
+   */
+  private async applyDisplayMode(): Promise<void> {
+    try {
+      const pinnedModeId = await this.storage.getDisplayModeId();
+      if (pinnedModeId !== null) {
+        await DisplayMode.setMode({ modeId: pinnedModeId });
+        console.log('[kiosk] applied pinned display mode:', pinnedModeId);
+      } else {
+        const result = await DisplayMode.setHighestResolution();
+        console.log('[kiosk] auto-selected highest display mode:', result);
+      }
+    } catch (err) {
+      console.log('[kiosk] DisplayMode plugin unavailable (expected in a browser):', err);
     }
   }
 

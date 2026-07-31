@@ -7,6 +7,7 @@ const KEYS = {
   creds: 'kiosk:deviceCreds',
   urlOverride: 'kiosk:urlOverride',
   hostname: 'kiosk:hostname',
+  displayModeId: 'kiosk:displayModeId',
 } as const;
 
 @Injectable({ providedIn: 'root' })
@@ -46,5 +47,16 @@ export class StorageService {
   }
   async setHostname(hostname: string): Promise<void> {
     await Preferences.set({ key: KEYS.hostname, value: hostname });
+  }
+
+  /** A manually-picked display mode (from the settings screen) wins over
+   * auto-selecting the highest available resolution, until cleared. */
+  async getDisplayModeId(): Promise<number | null> {
+    const { value } = await Preferences.get({ key: KEYS.displayModeId });
+    return value ? Number(value) : null;
+  }
+  async setDisplayModeId(modeId: number | null): Promise<void> {
+    if (modeId !== null) await Preferences.set({ key: KEYS.displayModeId, value: String(modeId) });
+    else await Preferences.remove({ key: KEYS.displayModeId });
   }
 }

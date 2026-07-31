@@ -29,6 +29,30 @@
     </section>
 
     <section class="section">
+      <h2>Display resolution</h2>
+      @if (displayModes.length === 0) {
+        <p class="info-line">Not available on this device (or running in a browser).</p>
+      } @else {
+        <div class="button-row" style="flex-wrap: wrap;">
+          @for (mode of displayModes; track mode.modeId) {
+            <button
+              #focusRow
+              class="focus-row"
+              style="flex: 0 0 auto;"
+              [class.focus-row-selected]="pinnedModeId === mode.modeId || (pinnedModeId === null && mode.isCurrent)"
+              (click)="setResolution(mode.modeId)"
+            >
+              {{ mode.width }}×{{ mode.height }}&#64;{{ mode.refreshRate }}Hz
+            </button>
+          }
+        </div>
+        <button #focusRow class="focus-row" (click)="useHighestResolution()">
+          Use highest available (auto)
+        </button>
+      }
+    </section>
+
+    <section class="section">
       <h2>Device info</h2>
       <p class="info-line">Hostname: {{ appState.hostname() }}</p>
       <p class="info-line">Device ID: {{ appState.creds()?.deviceId }}</p>

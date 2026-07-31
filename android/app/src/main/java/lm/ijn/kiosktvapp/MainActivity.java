@@ -15,6 +15,7 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(com.kiosktvapp.WifiSettingsPlugin.class);
     registerPlugin(com.kiosktvapp.KioskWebViewPlugin.class);
     registerPlugin(com.kiosktvapp.DeviceNamePlugin.class);
+    registerPlugin(com.kiosktvapp.DisplayModePlugin.class);
     super.onCreate(savedInstanceState);
 
     // Internal-network-only deployment with a self-signed/internal-CA cert.

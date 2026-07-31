@@ -53,6 +53,15 @@
   }
 }
 
+.focus-row-selected {
+  border-color: #7be08a !important;
+
+  &::after {
+    content: ' ✓';
+    color: #7be08a;
+  }
+}
+
 .url-input {
   display: block;
   width: 100%;

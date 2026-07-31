@@ -7,6 +7,7 @@ import { StorageService } from '../../services/storage.service';
 import { DeviceInfoService, BasicDeviceInfo } from '../../services/device-info.service';
 import { WifiSettings } from '../../plugins/wifi-settings.plugin';
 import { DeviceName } from '../../plugins/device-name.plugin';
+import { DisplayMode, DisplayModeInfo } from '../../plugins/display-mode.plugin';
 
 @Component({
   selector: 'app-settings',
@@ -27,6 +28,8 @@ export class SettingsPage implements OnInit {
   savedMessage: string | null = null;
   deviceInfo: BasicDeviceInfo;
   stableId: string | null = null;
+  displayModes: DisplayModeInfo[] = [];
+  pinnedModeId: number | null = null;
 
   constructor(
     public appState: AppStateService,
@@ -45,6 +48,12 @@ export class SettingsPage implements OnInit {
     DeviceName.getStableId()
       .then(({ id }) => (this.stableId = id))
       .catch(() => (this.stableId = null)); // plain browser, no native plugin
+
+    DisplayMode.listModes()
+      .then(({ modes }) => (this.displayModes = modes))
+      .catch(() => (this.displayModes = [])); // plain browser, no native plugin
+
+    this.storage.getDisplayModeId().then((id) => (this.pinnedModeId = id));
   }
 
   @HostListener('window:keydown', ['$event'])
@@ -72,6 +81,30 @@ export class SettingsPage implements OnInit {
       await WifiSettings.openSettings();
     } catch (err) {
       console.log('[kiosk] openWifiSettings failed:', err);
+    }
+  }
+
+  async setResolution(modeId: number): Promise<void> {
+    try {
+      await DisplayMode.setMode({ modeId });
+      await this.storage.setDisplayModeId(modeId);
+      this.pinnedModeId = modeId;
+      this.flashMessage('Resolution set — this choice is remembered across restarts.');
+    } catch (err) {
+      console.log('[kiosk] setResolution failed:', err);
+      this.flashMessage('Could not change resolution on this device.');
+    }
+  }
+
+  async useHighestResolution(): Promise<void> {
+    try {
+      const result = await DisplayMode.setHighestResolution();
+      await this.storage.setDisplayModeId(null);
+      this.pinnedModeId = null;
+      this.flashMessage(`Using highest available: ${result.width}×${result.height}@${result.refreshRate}Hz`);
+    } catch (err) {
+      console.log('[kiosk] useHighestResolution failed:', err);
+      this.flashMessage('Could not change resolution on this device.');
     }
   }
 
