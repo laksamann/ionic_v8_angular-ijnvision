@@ -6,6 +6,7 @@ export interface KioskWebViewPlugin {
   hide(): Promise<void>;
   reload(): Promise<void>;
   clearCacheAndReload(): Promise<void>;
+  captureScreenshot(): Promise<{ base64: string }>;
   addListener(
     eventName: 'pageLoadStart' | 'pageLoadFinished',
     listenerFunc: (data: { url: string }) => void

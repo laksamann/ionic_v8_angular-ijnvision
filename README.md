@@ -95,7 +95,7 @@ const SERVER_URL = 'https://testmobile.ijn.com.my';
 
 ```bash
 npm install
-npm run build                 # ng build, outputs to dist/kiosk-ionic-app/browser
+npm run build                 # ng build, outputs to dist/app/browser
 npx cap sync android          # copies web build + plugins into the native project
 cd android
 ./gradlew assembleDebug
@@ -155,4 +155,3 @@ reboot/shutdown and to prevent the launcher from being backgrounded, a
 Network Security Config with a pinned certificate instead of the blanket TLS
 bypass if this app ever needs to talk to a server outside your internal
 network.
-"# ionic_v8_angular-ijnvision" 

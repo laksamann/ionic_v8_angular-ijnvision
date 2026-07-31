@@ -11,6 +11,10 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import java.io.ByteArrayOutputStream;
+import android.util.Base64;
 
 /**
  * Manages a second, separate Android WebView layered on top of Capacitor's
@@ -87,6 +91,49 @@ public class KioskWebViewPlugin extends Plugin {
       }
     });
     call.resolve();
+  }
+
+  /**
+   * Captures the kiosk WebView's currently rendered content as a JPEG,
+   * returned as base64 (kept in memory, never written to disk here — the
+   * JS side uploads it directly to kiosk-server via multipart/form-data).
+   *
+   * Uses view.draw(canvas) rather than the newer PixelCopy API — simpler,
+   * and WebView (unlike GLSurfaceView/hardware-accelerated video views)
+   * composites normally into the view hierarchy, so draw()-based capture
+   * works correctly here. If screenshots ever come out blank on a specific
+   * device/OS version, PixelCopy is the documented fallback for
+   * hardware-accelerated capture.
+   */
+  @PluginMethod
+  public void captureScreenshot(PluginCall call) {
+    getActivity().runOnUiThread(() -> {
+      if (kioskWebView == null || kioskWebView.getWidth() == 0 || kioskWebView.getHeight() == 0) {
+        call.reject("kiosk WebView not ready — nothing visible to capture yet");
+        return;
+      }
+
+      try {
+        Bitmap bitmap = Bitmap.createBitmap(
+          kioskWebView.getWidth(),
+          kioskWebView.getHeight(),
+          Bitmap.Config.ARGB_8888
+        );
+        Canvas canvas = new Canvas(bitmap);
+        kioskWebView.draw(canvas);
+
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream);
+        String base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP);
+        bitmap.recycle();
+
+        JSObject result = new JSObject();
+        result.put("base64", base64);
+        call.resolve(result);
+      } catch (Exception e) {
+        call.reject("screenshot capture failed: " + e.getMessage());
+      }
+    });
   }
 
   private class TrustAllClient extends WebViewClient {

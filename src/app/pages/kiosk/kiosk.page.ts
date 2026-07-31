@@ -234,8 +234,19 @@ export class KioskPage implements OnInit, OnDestroy {
           }
           break;
         }
-        // reboot_device / shutdown_device / screenshot / play_sound need
-        // native plugins or device-owner permissions — see README.
+        case 'screenshot': {
+          if (this.useIframeFallback) {
+            // Cross-origin <iframe> content can't be captured via canvas —
+            // browsers block this as a security measure (a "tainted canvas"
+            // security error), unlike the native WebView path below.
+            throw new Error('screenshot unavailable in iframe fallback mode (cross-origin canvas restriction)');
+          }
+          const { base64 } = await KioskWebView.captureScreenshot();
+          await this.api.uploadScreenshot(creds, base64);
+          break;
+        }
+        // reboot_device / shutdown_device / play_sound need native plugins
+        // or device-owner permissions — see README.
         default:
           break;
       }

@@ -1,5 +1,5 @@
 {
-  "name": "kiosk-ionic-app",
+  "name": "app",
   "integrations": {
     "capacitor": {}
   },

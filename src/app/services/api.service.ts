@@ -70,6 +70,31 @@ export class ApiService {
     return res.json();
   }
 
+  /**
+   * @param base64 raw base64 (no "data:image/jpeg;base64," prefix) — matches
+   * what KioskWebViewPlugin.captureScreenshot() returns.
+   */
+  async uploadScreenshot(creds: DeviceCreds, base64: string): Promise<void> {
+    const byteChars = atob(base64);
+    const bytes = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) {
+      bytes[i] = byteChars.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: 'image/jpeg' });
+
+    const formData = new FormData();
+    formData.append('file', blob, 'screenshot.jpg');
+
+    const res = await fetch(`${this.base}/uploadScreenshot`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${creds.token}` },
+      // No Content-Type header set manually — the browser/WebView sets the
+      // correct multipart boundary itself when the body is a FormData.
+      body: formData,
+    });
+    if (!res.ok) throw new Error(`uploadScreenshot failed: ${res.status}`);
+  }
+
   wsUrl(creds: DeviceCreds): string {
     const wsBase = this.base.replace(/^http/, 'ws');
     return `${wsBase}/ws?token=${encodeURIComponent(creds.token)}`;
