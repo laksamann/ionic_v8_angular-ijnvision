@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { Preferences } from '@capacitor/preferences';
-import type { DeviceCreds } from '../models/types';
+import type { DeviceConfig, DeviceCreds } from '../models/types';
 
 const KEYS = {
   serverUrl: 'kiosk:serverUrl',
@@ -10,6 +10,7 @@ const KEYS = {
   displayModeId: 'kiosk:displayModeId',
   zoomOverride: 'kiosk:zoomOverride',
   rotationDegrees: 'kiosk:rotationDegrees',
+  lastRemoteConfig: 'kiosk:lastRemoteConfig',
 } as const;
 
 @Injectable({ providedIn: 'root' })
@@ -33,7 +34,22 @@ export class StorageService {
     await Preferences.remove({ key: KEYS.creds });
   }
 
-  /** A manually-set URL on the settings screen wins over the server-assigned homepage until cleared. */
+  async getLastRemoteConfig(): Promise<DeviceConfig | null> {
+    const { value } = await Preferences.get({ key: KEYS.lastRemoteConfig });
+    if (!value) return null;
+    try {
+      return JSON.parse(value) as DeviceConfig;
+    } catch {
+      await Preferences.remove({ key: KEYS.lastRemoteConfig });
+      return null;
+    }
+  }
+
+  async setLastRemoteConfig(config: DeviceConfig): Promise<void> {
+    await Preferences.set({ key: KEYS.lastRemoteConfig, value: JSON.stringify(config) });
+  }
+
+  /** Legacy keys retained only to migrate installs made before two-way sync. */
   async getUrlOverride(): Promise<string | null> {
     const { value } = await Preferences.get({ key: KEYS.urlOverride });
     return value;
@@ -62,9 +78,7 @@ export class StorageService {
     else await Preferences.remove({ key: KEYS.displayModeId });
   }
 
-  /** A manually-set zoom level (from the settings screen) wins over the
-   * server-assigned zoomLevel config, until cleared — same pattern as
-   * the URL override above. */
+  /** Legacy zoom override retained only to migrate older installs. */
   async getZoomOverride(): Promise<number | null> {
     const { value } = await Preferences.get({ key: KEYS.zoomOverride });
     return value ? Number(value) : null;

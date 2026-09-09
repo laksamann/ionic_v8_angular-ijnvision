@@ -21,6 +21,9 @@ export class KioskSocketService {
   readonly close$ = new Subject<void>();
 
   connect(url: string): void {
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      this.ws.close();
+    }
     this.url = url;
     this.closedByUser = false;
     this.open();
@@ -77,6 +80,8 @@ export class KioskSocketService {
   close(): void {
     this.closedByUser = true;
     if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     this.ws?.close();
+    this.ws = null;
   }
 }

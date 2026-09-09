@@ -9,6 +9,22 @@ import { WifiSettings } from '../../plugins/wifi-settings.plugin';
 import { DeviceName } from '../../plugins/device-name.plugin';
 import { DisplayMode, DisplayModeInfo } from '../../plugins/display-mode.plugin';
 import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
+import { addIcons } from 'ionicons';
+import {
+  addOutline,
+  arrowForwardOutline,
+  chevronForwardOutline,
+  cloudUploadOutline,
+  desktopOutline,
+  gameControllerOutline,
+  globeOutline,
+  hardwareChipOutline,
+  informationCircleOutline,
+  lockClosedOutline,
+  removeOutline,
+  syncOutline,
+  wifiOutline,
+} from 'ionicons/icons';
 
 @Component({
   selector: 'app-settings',
@@ -27,6 +43,7 @@ export class SettingsPage implements OnInit {
 
   urlInput = '';
   savedMessage: string | null = null;
+  syncing = false;
   deviceInfo: BasicDeviceInfo;
   stableId: string | null = null;
   displayModes: DisplayModeInfo[] = [];
@@ -39,6 +56,21 @@ export class SettingsPage implements OnInit {
     deviceInfoService: DeviceInfoService
   ) {
     this.deviceInfo = deviceInfoService.getBasicInfo();
+    addIcons({
+      addOutline,
+      arrowForwardOutline,
+      chevronForwardOutline,
+      cloudUploadOutline,
+      desktopOutline,
+      gameControllerOutline,
+      globeOutline,
+      hardwareChipOutline,
+      informationCircleOutline,
+      lockClosedOutline,
+      removeOutline,
+      syncOutline,
+      wifiOutline,
+    });
   }
 
   ngOnInit(): void {
@@ -65,12 +97,15 @@ export class SettingsPage implements OnInit {
     if (rows.length === 0) return;
 
     const activeIndex = rows.indexOf(document.activeElement as HTMLElement);
+    const editingText = document.activeElement instanceof HTMLInputElement;
 
-    if (event.key === 'ArrowDown') {
+    if (editingText && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
       event.preventDefault();
       const next = rows[Math.min(activeIndex + 1, rows.length - 1)] ?? rows[0];
       next.focus();
-    } else if (event.key === 'ArrowUp') {
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
       event.preventDefault();
       const prev = rows[Math.max(activeIndex - 1, 0)] ?? rows[0];
       prev.focus();
@@ -111,17 +146,46 @@ export class SettingsPage implements OnInit {
     }
   }
 
-  async saveUrlOverride(): Promise<void> {
+  async saveAssignedUrl(): Promise<void> {
     const trimmed = this.urlInput.trim();
     if (!trimmed) return;
-    await this.appState.setUrlOverride(trimmed);
-    this.flashMessage('Saved — applied immediately.');
+
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('unsupported URL protocol');
+      }
+    } catch {
+      this.flashMessage('Enter a complete http:// or https:// URL.');
+      return;
+    }
+
+    this.syncing = true;
+    try {
+      const config = await this.appState.updateConfigFromDevice({ homepage: trimmed });
+      this.urlInput = config.homepage;
+      this.flashMessage('Saved to server — dashboard and database updated.');
+    } catch (err) {
+      console.log('[kiosk] saveAssignedUrl failed:', err);
+      this.flashMessage('Could not save URL to the server. Check the connection and URL.');
+    } finally {
+      this.syncing = false;
+    }
   }
 
-  async clearUrlOverride(): Promise<void> {
-    await this.appState.setUrlOverride(null);
-    this.urlInput = this.appState.homepage();
-    this.flashMessage('Override cleared — back to server-assigned URL.');
+  async refreshFromServer(): Promise<void> {
+    this.syncing = true;
+    try {
+      const config = await this.appState.syncRemoteConfig();
+      this.urlInput = config.homepage;
+      await KioskWebView.setZoom({ percent: config.zoomLevel }).catch(() => {});
+      this.flashMessage('Latest browser settings loaded from the server.');
+    } catch (err) {
+      console.log('[kiosk] refreshFromServer failed:', err);
+      this.flashMessage('Could not reach the management server.');
+    } finally {
+      this.syncing = false;
+    }
   }
 
   async zoomIn(): Promise<void> {
@@ -133,28 +197,20 @@ export class SettingsPage implements OnInit {
   }
 
   async resetZoom(): Promise<void> {
-    try {
-      await this.appState.setZoomOverride(null); // clears the pin — reverts to the default;
-      // note: like clearUrlOverride(), this doesn't re-fetch the server's
-      // actual current zoomLevel, it reverts to the hardcoded default. The
-      // real server value re-applies next time this device re-registers or
-      // receives a fresh update_config push.
-      await KioskWebView.setZoom({ percent: this.appState.zoomLevel() });
-      this.flashMessage(`Zoom override cleared — reset to ${this.appState.zoomLevel()}%.`);
-    } catch (err) {
-      console.log('[kiosk] resetZoom failed:', err);
-      this.flashMessage('Could not change zoom on this device.');
-    }
+    await this.applyZoom(100);
   }
 
   private async applyZoom(percent: number): Promise<void> {
+    this.syncing = true;
     try {
-      await this.appState.setZoomOverride(percent);
-      await KioskWebView.setZoom({ percent });
-      this.flashMessage(`Zoom set to ${percent}% — remembered across restarts.`);
+      const config = await this.appState.updateConfigFromDevice({ zoomLevel: percent });
+      await KioskWebView.setZoom({ percent: config.zoomLevel });
+      this.flashMessage(`Zoom ${config.zoomLevel}% saved to server and applied.`);
     } catch (err) {
       console.log('[kiosk] applyZoom failed:', err);
       this.flashMessage('Could not change zoom on this device.');
+    } finally {
+      this.syncing = false;
     }
   }
 

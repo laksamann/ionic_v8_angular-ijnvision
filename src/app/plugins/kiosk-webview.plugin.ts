@@ -9,6 +9,8 @@ export interface KioskWebViewPlugin {
   captureScreenshot(): Promise<{ base64: string }>;
   setZoom(options: { percent: number }): Promise<void>;
   getZoom(): Promise<{ percent: number }>;
+  setNavigationAllowed(options: { allowed: boolean }): Promise<void>;
+  setCursorVisible(options: { visible: boolean }): Promise<void>;
   /** degrees must be one of 0, 90, 180, 270 */
   setRotation(options: { degrees: number }): Promise<void>;
   getRotation(): Promise<{ degrees: number }>;

@@ -8,9 +8,10 @@ import { KioskSocketService } from '../../services/kiosk-socket.service';
 import { StorageService } from '../../services/storage.service';
 import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
 import type { PluginListenerHandle } from '@capacitor/core';
-import type { Command } from '../../models/types';
+import type { Subscription } from 'rxjs';
+import type { Command, DeviceConfig } from '../../models/types';
+import { environment } from '../../../environments/environment';
 
-const APP_VERSION = '1.0.0';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 @Component({
@@ -46,8 +47,13 @@ export class KioskPage implements OnInit, OnDestroy {
   useIframeFallback = Capacitor.getPlatform() === 'web';
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private reloadTimer: ReturnType<typeof setInterval> | null = null;
+  private screenshotTimer: ReturnType<typeof setInterval> | null = null;
+  private reloadInFlight = false;
+  private screenshotInFlight = false;
   private appStartMs = Date.now();
   private listenerHandles: PluginListenerHandle[] = [];
+  private subscriptions: Subscription[] = [];
 
   constructor(
     public appState: AppStateService,
@@ -72,6 +78,7 @@ export class KioskPage implements OnInit, OnDestroy {
         this.listenerHandles.push(
           await KioskWebView.addListener('pageLoadFinished', (data) => {
             setTimeout(() => (this.loading = false), 0);
+            this.url = data.url;
             console.log('[kiosk] page finished loading:', data.url);
           })
         );
@@ -109,11 +116,16 @@ export class KioskPage implements OnInit, OnDestroy {
       }
     }
 
+    await this.applyRuntimeConfig(this.appState.remoteConfig());
+
     const creds = this.appState.creds();
     if (!creds) return;
 
     // WebSocket: instant command delivery while the app is running.
-    this.socket.command$.subscribe((command) => this.handleCommand(command));
+    this.subscriptions.push(
+      this.socket.command$.subscribe((command) => void this.handleCommand(command)),
+      this.socket.open$.subscribe(() => void this.refreshConfigFromServer())
+    );
     this.socket.connect(this.api.wsUrl(creds));
 
     // Heartbeat: works even if the socket is momentarily down, and is how
@@ -125,6 +137,9 @@ export class KioskPage implements OnInit, OnDestroy {
   async ngOnDestroy(): Promise<void> {
     this.socket.close();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.reloadTimer) clearInterval(this.reloadTimer);
+    if (this.screenshotTimer) clearInterval(this.screenshotTimer);
+    for (const subscription of this.subscriptions) subscription.unsubscribe();
     if (!this.useIframeFallback) {
       try {
         for (const handle of this.listenerHandles) await handle.remove();
@@ -208,11 +223,11 @@ export class KioskPage implements OnInit, OnDestroy {
         diskTotalGb: 0,
         currentUrl: this.url,
         uptimeSeconds: Math.round((Date.now() - this.appStartMs) / 1000),
-        appVersion: APP_VERSION,
+        appVersion: environment.appVersion,
         networkType: 'wifi',
       });
-      for (const cmd of res.pendingCommands as Command[]) {
-        this.handleCommand(cmd);
+      for (const cmd of res.pendingCommands) {
+        void this.handleCommand(cmd);
       }
     } catch {
       // offline — heartbeat retries on the next interval, WS reconnect handles the rest.
@@ -227,7 +242,7 @@ export class KioskPage implements OnInit, OnDestroy {
       switch (command.type) {
         case 'open_url': {
           const target = command.payload['url'] as string;
-          await this.storage.setUrlOverride(target);
+          if (!target) throw new Error('open_url requires payload.url');
           await this.showUrl(target);
           break;
         }
@@ -238,48 +253,118 @@ export class KioskPage implements OnInit, OnDestroy {
           await this.reloadDisplay(true);
           break;
         case 'restart_app':
-          // Web-level "restart": reload the display. A real process restart
-          // isn't meaningful for a Capacitor app the way it is for a native
-          // RN/Electron process.
-          await this.reloadDisplay();
+          window.location.reload();
           break;
         case 'update_config': {
-          const cfg = command.payload['config'] as { homepage?: string; zoomLevel?: number } | undefined;
-          const urlOverride = await this.storage.getUrlOverride();
-          if (cfg?.homepage && cfg.homepage !== 'about:blank' && !urlOverride) {
-            await this.showUrl(cfg.homepage);
-          }
-
-          const zoomOverride = await this.storage.getZoomOverride();
-          if (cfg?.zoomLevel && zoomOverride === null && !this.useIframeFallback) {
-            this.appState.zoomLevel.set(cfg.zoomLevel);
-            await KioskWebView.setZoom({ percent: cfg.zoomLevel }).catch((err) =>
-              console.log('[kiosk] setZoom (from update_config) failed:', err)
-            );
-          }
+          const patch = command.payload['config'] as Partial<DeviceConfig> | undefined;
+          if (!patch) throw new Error('update_config requires payload.config');
+          const config = { ...this.appState.remoteConfig(), ...patch };
+          await this.appState.applyRemoteConfig(config);
+          await this.applyRuntimeConfig(this.appState.remoteConfig());
           break;
         }
-        case 'screenshot': {
-          if (this.useIframeFallback) {
-            // Cross-origin <iframe> content can't be captured via canvas —
-            // browsers block this as a security measure (a "tainted canvas"
-            // security error), unlike the native WebView path below.
-            throw new Error('screenshot unavailable in iframe fallback mode (cross-origin canvas restriction)');
-          }
-          const { base64 } = await KioskWebView.captureScreenshot();
-          await this.api.uploadScreenshot(creds, base64);
+        case 'screenshot':
+          await this.captureAndUploadScreenshot();
+          break;
+        case 'play_sound': {
+          const soundUrl = command.payload['url'] as string;
+          if (!soundUrl) throw new Error('play_sound requires payload.url');
+          await new Audio(soundUrl).play();
           break;
         }
-        // reboot_device / shutdown_device / play_sound need native plugins
-        // or device-owner permissions — see README.
-        default:
-          break;
+        case 'reboot_device':
+        case 'shutdown_device':
+          throw new Error(`${command.type} requires Android Device Owner provisioning`);
       }
       this.socket.sendAck(command.id, 'acked');
       await this.api.ackCommand(creds, command.id, 'acked').catch(() => {});
     } catch (err) {
       this.socket.sendAck(command.id, 'failed', String(err));
       await this.api.ackCommand(creds, command.id, 'failed', String(err)).catch(() => {});
+    }
+  }
+
+  private async refreshConfigFromServer(): Promise<void> {
+    try {
+      const config = await this.appState.syncRemoteConfig();
+      await this.applyRuntimeConfig(config);
+    } catch (err) {
+      console.log('[kiosk] config refresh after WebSocket connect failed:', err);
+    }
+  }
+
+  private async applyRuntimeConfig(config: DeviceConfig): Promise<void> {
+    const targetUrl = this.appState.homepage();
+    if (targetUrl && targetUrl !== this.url && targetUrl !== 'about:blank') {
+      await this.showUrl(targetUrl);
+    }
+
+    if (!this.useIframeFallback) {
+      await Promise.all([
+        KioskWebView.setZoom({ percent: this.appState.zoomLevel() }),
+        KioskWebView.setNavigationAllowed({ allowed: config.allowNavigation }),
+        KioskWebView.setCursorVisible({ visible: config.showCursor }),
+      ]).catch((err) => console.log('[kiosk] applying native config failed:', err));
+    }
+
+    this.configurePeriodicTasks(config);
+  }
+
+  private configurePeriodicTasks(config: DeviceConfig): void {
+    if (this.reloadTimer) clearInterval(this.reloadTimer);
+    if (this.screenshotTimer) clearInterval(this.screenshotTimer);
+    this.reloadTimer = null;
+    this.screenshotTimer = null;
+
+    if (config.reloadEverySeconds !== null && config.reloadEverySeconds >= 10) {
+      this.reloadTimer = setInterval(
+        () => void this.periodicReload().catch((err) => console.log('[kiosk] periodic reload failed:', err)),
+        config.reloadEverySeconds * 1000
+      );
+    }
+
+    if (
+      !this.useIframeFallback &&
+      config.takeScreenshotEverySeconds !== null &&
+      config.takeScreenshotEverySeconds >= 30
+    ) {
+      this.screenshotTimer = setInterval(
+        () =>
+          void this.captureAndUploadScreenshot().catch((err) =>
+            console.log('[kiosk] periodic screenshot failed:', err)
+          ),
+        config.takeScreenshotEverySeconds * 1000
+      );
+    }
+  }
+
+  private async periodicReload(): Promise<void> {
+    if (this.reloadInFlight) return;
+    this.reloadInFlight = true;
+    try {
+      await this.reloadDisplay();
+    } finally {
+      this.reloadInFlight = false;
+    }
+  }
+
+  private async captureAndUploadScreenshot(): Promise<void> {
+    if (this.useIframeFallback) {
+      throw new Error(
+        'screenshot unavailable in iframe fallback mode (cross-origin canvas restriction)'
+      );
+    }
+    if (this.screenshotInFlight) return;
+
+    const creds = this.appState.creds();
+    if (!creds) throw new Error('device is not registered');
+
+    this.screenshotInFlight = true;
+    try {
+      const { base64 } = await KioskWebView.captureScreenshot();
+      await this.api.uploadScreenshot(creds, base64);
+    } finally {
+      this.screenshotInFlight = false;
     }
   }
 }

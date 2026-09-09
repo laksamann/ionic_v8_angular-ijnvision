@@ -1,11 +1,18 @@
 package com.kiosktvapp;
 
 import android.net.http.SslError;
+import android.net.Uri;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebChromeClient;
+import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.widget.FrameLayout;
+import android.widget.ProgressBar;
+import android.view.Gravity;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -61,6 +68,7 @@ import android.util.Base64;
 public class KioskWebViewPlugin extends Plugin {
 
   private WebView kioskWebView;
+  private ProgressBar loadProgress;
   // Must match the width used in the viewport meta tag rewrite in
   // shouldInterceptRequest() below — the WebView's own canvas size and
   // the width we tell the page it has must stay in sync, or the two
@@ -75,20 +83,15 @@ public class KioskWebViewPlugin extends Plugin {
   private float realWidthPx;
   private float realHeightPx;
   private float density = 1f;
-  // How tall the actual rendered content is, in CSS px — measured after
-  // each page load (see measureContentHeight()) and clamped to at most
-  // VIRTUAL_HEIGHT_DP. Starts at the full virtual height as a safe
-  // default until the first measurement completes. This only ever
-  // shrinks the canvas for shorter content (this file's WIDTH handling —
-  // the fix for desktop-vs-mobile layout — is untouched by this; only
-  // the height varies).
-  private float contentHeightDp = VIRTUAL_HEIGHT_DP;
-  // Scales the fixed VIRTUAL_WIDTH_DP x (current contentHeightDp) canvas
-  // down (or up) to fit the real screen — recomputed in applyTransform()
-  // itself since it depends on contentHeightDp, which changes per page.
+  // The browser always keeps a full 1920x1080 virtual canvas. Earlier builds
+  // shrank this height to short page content, which left the experience
+  // looking like a scaled widget instead of a full-screen kiosk browser.
   private float fitScale = 1f;
   private int targetZoomPercent = 100;
   private int targetRotationDegrees = 0; // one of 0, 90, 180, 270
+  private boolean navigationAllowed = false;
+  private boolean cursorVisible = false;
+  private String lockedOrigin = null;
 
   private WebView ensureWebView() {
     if (kioskWebView == null) {
@@ -96,7 +99,15 @@ public class KioskWebViewPlugin extends Plugin {
       kioskWebView.setBackgroundColor(android.graphics.Color.BLACK);
       kioskWebView.getSettings().setJavaScriptEnabled(true);
       kioskWebView.getSettings().setDomStorageEnabled(true);
+      kioskWebView.getSettings().setDatabaseEnabled(true);
       kioskWebView.getSettings().setMediaPlaybackRequiresUserGesture(false);
+      kioskWebView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+      kioskWebView.getSettings().setBuiltInZoomControls(false);
+      kioskWebView.getSettings().setDisplayZoomControls(false);
+      kioskWebView.getSettings().setSupportZoom(false);
+      kioskWebView.getSettings().setAllowContentAccess(true);
+      kioskWebView.getSettings().setAllowFileAccess(true);
+      kioskWebView.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
       // The displayed page is a separate internal system (not something we
       // control). Android WebView's default User-Agent contains "Mobile",
       // which some backends (including ones using mobile-detection
@@ -117,22 +128,48 @@ public class KioskWebViewPlugin extends Plugin {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       );
+      CookieManager cookieManager = CookieManager.getInstance();
+      cookieManager.setAcceptCookie(true);
+      cookieManager.setAcceptThirdPartyCookies(kioskWebView, true);
       kioskWebView.setWebViewClient(new TrustAllClient());
+      kioskWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+      kioskWebView.setFocusable(true);
+      kioskWebView.setFocusableInTouchMode(true);
 
       android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
       getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(dm);
       realWidthPx = dm.widthPixels;
       realHeightPx = dm.heightPixels;
       density = dm.density;
-      // fitScale is computed inside applyTransform() itself now, not here
-      // — it depends on contentHeightDp, which gets updated per page load
-      // (see measureContentHeight()), so it can't be a fixed one-time value.
+      // fitScale is computed in applyTransform() from this real display size.
 
       // Actual initial size/position get set by applyTransform() below —
       // this starting size is just a placeholder until that first call.
       ViewGroup.LayoutParams params =
         new ViewGroup.LayoutParams((int) realWidthPx, (int) realHeightPx);
       getActivity().addContentView(kioskWebView, params);
+      loadProgress = new ProgressBar(
+        getContext(),
+        null,
+        android.R.attr.progressBarStyleHorizontal
+      );
+      FrameLayout.LayoutParams progressParams = new FrameLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        Math.max(4, (int) (4 * density))
+      );
+      progressParams.gravity = Gravity.TOP;
+      getActivity().addContentView(loadProgress, progressParams);
+      loadProgress.setMax(100);
+      loadProgress.setVisibility(View.GONE);
+      kioskWebView.setWebChromeClient(new WebChromeClient() {
+        @Override
+        public void onProgressChanged(WebView view, int progress) {
+          if (loadProgress == null) return;
+          loadProgress.setProgress(progress);
+          loadProgress.setVisibility(progress >= 100 ? View.GONE : View.VISIBLE);
+          if (progress < 100) loadProgress.bringToFront();
+        }
+      });
       // Should already be the default for a FrameLayout-based content
       // view, but explicit rather than assumed — this is what makes
       // rotated/zoomed content that extends beyond the real screen size
@@ -153,10 +190,15 @@ public class KioskWebViewPlugin extends Plugin {
     getActivity().runOnUiThread(() -> {
       WebView wv = ensureWebView();
       if (url != null && !url.isEmpty()) {
+        lockedOrigin = originOf(url);
         wv.loadUrl(url);
       }
       wv.setVisibility(View.VISIBLE);
       wv.bringToFront();
+      if (loadProgress != null && loadProgress.getProgress() < 100) {
+        loadProgress.setVisibility(View.VISIBLE);
+        loadProgress.bringToFront();
+      }
     });
     call.resolve();
   }
@@ -165,6 +207,7 @@ public class KioskWebViewPlugin extends Plugin {
   public void hide(PluginCall call) {
     getActivity().runOnUiThread(() -> {
       if (kioskWebView != null) kioskWebView.setVisibility(View.GONE);
+      if (loadProgress != null) loadProgress.setVisibility(View.GONE);
     });
     call.resolve();
   }
@@ -215,6 +258,31 @@ public class KioskWebViewPlugin extends Plugin {
     call.resolve(result);
   }
 
+  @PluginMethod
+  public void setNavigationAllowed(PluginCall call) {
+    Boolean allowed = call.getBoolean("allowed");
+    if (allowed == null) {
+      call.reject("allowed is required");
+      return;
+    }
+    navigationAllowed = allowed;
+    call.resolve();
+  }
+
+  @PluginMethod
+  public void setCursorVisible(PluginCall call) {
+    Boolean visible = call.getBoolean("visible");
+    if (visible == null) {
+      call.reject("visible is required");
+      return;
+    }
+    cursorVisible = visible;
+    getActivity().runOnUiThread(() -> {
+      applyCursorStyle();
+      call.resolve();
+    });
+  }
+
   /**
    * Manually rotates the displayed content — 0, 90, 180, or 270 degrees.
    * Independent of the device's physical orientation sensor; see the
@@ -263,15 +331,12 @@ public class KioskWebViewPlugin extends Plugin {
     if (kioskWebView == null) return;
 
     boolean swapped = (targetRotationDegrees == 90 || targetRotationDegrees == 270);
-    int layoutWidthPx = (int) ((swapped ? contentHeightDp : VIRTUAL_WIDTH_DP) * density);
-    int layoutHeightPx = (int) ((swapped ? VIRTUAL_WIDTH_DP : contentHeightDp) * density);
+    int layoutWidthPx = (int) ((swapped ? VIRTUAL_HEIGHT_DP : VIRTUAL_WIDTH_DP) * density);
+    int layoutHeightPx = (int) ((swapped ? VIRTUAL_WIDTH_DP : VIRTUAL_HEIGHT_DP) * density);
 
-    // Recomputed here rather than once — depends on contentHeightDp,
-    // which changes per page load (see measureContentHeight()). Width
-    // side of this is unchanged from before: still always VIRTUAL_WIDTH_DP.
     fitScale = Math.min(
-      realWidthPx / (VIRTUAL_WIDTH_DP * density),
-      realHeightPx / (contentHeightDp * density)
+      realWidthPx / layoutWidthPx,
+      realHeightPx / layoutHeightPx
     );
 
     ViewGroup.LayoutParams params = kioskWebView.getLayoutParams();
@@ -305,34 +370,32 @@ public class KioskWebViewPlugin extends Plugin {
     kioskWebView.setScaleY(combinedScale);
   }
 
-  /**
-   * Measures the actual rendered content height and shrinks the virtual
-   * canvas's height to match, if the page is shorter than the full
-   * VIRTUAL_HEIGHT_DP assumption — this is what was leaving blank space
-   * below shorter pages (e.g. a compact stats dashboard with just a
-   * handful of cards, nowhere near 1080dp tall). Deliberately only
-   * shrinks, never grows beyond VIRTUAL_HEIGHT_DP — taller-than-1080
-   * content scrolling internally is a separate concern from the blank-
-   * space-below-short-content issue this specifically addresses, and out
-   * of scope here. Width is completely untouched by this — still always
-   * VIRTUAL_WIDTH_DP, unrelated to this method.
-   */
-  private void measureContentHeight() {
+  private void applyCursorStyle() {
     if (kioskWebView == null) return;
-    kioskWebView.evaluateJavascript("document.documentElement.scrollHeight", (String result) -> {
-      try {
-        float measuredDp = Float.parseFloat(result);
-        // Floor guards against a near-zero reading from a still-loading
-        // or otherwise not-yet-measurable page leaving the canvas
-        // absurdly short; ceiling keeps this a shrink-only adjustment.
-        contentHeightDp = Math.max(400f, Math.min(measuredDp, VIRTUAL_HEIGHT_DP));
-        applyTransform();
-      } catch (Exception e) {
-        // Failed measurement (unexpected result format, etc.) — leave
-        // contentHeightDp at whatever it was before rather than risk an
-        // exception disrupting page load.
-      }
-    });
+    String cursor = cursorVisible ? "auto" : "none";
+    kioskWebView.evaluateJavascript(
+      "(function(){document.documentElement.style.cursor='" + cursor +
+        "';if(document.body){document.body.style.cursor='" + cursor + "';}})()",
+      null
+    );
+  }
+
+  private String originOf(String rawUrl) {
+    try {
+      Uri uri = Uri.parse(rawUrl);
+      String scheme = uri.getScheme();
+      String authority = uri.getEncodedAuthority();
+      if (scheme == null || authority == null) return null;
+      return scheme.toLowerCase() + "://" + authority.toLowerCase();
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private boolean shouldBlockNavigation(String targetUrl) {
+    if (navigationAllowed || lockedOrigin == null) return false;
+    String targetOrigin = originOf(targetUrl);
+    return targetOrigin != null && !lockedOrigin.equals(targetOrigin);
   }
 
   /** Captures the kiosk WebView's currently rendered content as a JPEG,
@@ -399,12 +462,23 @@ public class KioskWebViewPlugin extends Plugin {
       // not the page content, so they aren't reset by navigating to a new
       // URL (the viewport rewrite in shouldInterceptRequest below IS
       // content-level and gets freshly applied on every fetch
-      // automatically). But content HEIGHT varies per page, so that part
-      // does need remeasuring after every load.
-      measureContentHeight();
+      // automatically). The virtual canvas remains full 1920x1080 so short
+      // pages still occupy a real browser-sized viewport.
+      applyCursorStyle();
       JSObject data = new JSObject();
       data.put("url", url);
       notifyListeners("pageLoadFinished", data);
+    }
+
+    @Override
+    public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+      return shouldBlockNavigation(request.getUrl().toString());
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public boolean shouldOverrideUrlLoading(WebView view, String url) {
+      return shouldBlockNavigation(url);
     }
 
     @Override

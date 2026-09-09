@@ -31,16 +31,19 @@
   background: #000;
 }
 
-.debug-banner {
+.preview-badge {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  right: auto;
   z-index: 20;
-  background: rgba(0, 0, 0, 0.6);
-  color: #8fd18f;
+  margin: 12px;
+  border: 1px solid rgba(117, 167, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.88);
+  color: #b8d1ff;
   font-size: 12px;
-  padding: 4px 8px;
+  padding: 7px 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

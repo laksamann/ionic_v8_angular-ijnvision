@@ -8,6 +8,11 @@ export interface DeviceCreds {
   token: string;
 }
 
+export interface RegistrationResponse extends DeviceCreds {
+  reused: boolean;
+  config: DeviceConfig;
+}
+
 export interface HeartbeatPayload {
   cpu: number;
   ramUsedMb: number;
@@ -37,6 +42,8 @@ export interface Command {
   type: CommandType;
   payload: Record<string, unknown>;
   createdAt: string;
+  deliveredAt: string | null;
+  ackAt: string | null;
   status: 'queued' | 'delivered' | 'acked' | 'failed';
 }
 

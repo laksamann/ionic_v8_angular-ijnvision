@@ -1,6 +1,13 @@
 import { Injectable } from '@angular/core';
 import { Capacitor } from '@capacitor/core';
-import type { DeviceCreds, HeartbeatPayload, DeviceConfig, Platform } from '../models/types';
+import type {
+  Command,
+  DeviceCreds,
+  HeartbeatPayload,
+  DeviceConfig,
+  Platform,
+  RegistrationResponse,
+} from '../models/types';
 
 function detectPlatform(): Platform {
   // Google TV devices report as Android under the hood; there's no reliable
@@ -11,7 +18,13 @@ function detectPlatform(): Platform {
 
 export interface PendingCommandsResponse {
   ok: true;
-  pendingCommands: unknown[];
+  pendingCommands: Command[];
+}
+
+export interface DeviceConfigUpdateResponse {
+  ok: true;
+  config: DeviceConfig;
+  updatedFields: Array<'homepage' | 'zoomLevel'>;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -22,13 +35,21 @@ export class ApiService {
     this.base = serverUrl.replace(/\/+$/, '');
   }
 
-  async register(hostname: string, appVersion: string, mac?: string): Promise<DeviceCreds> {
+  async register(
+    hostname: string,
+    appVersion: string,
+    enrollmentCode: string,
+    mac?: string
+  ): Promise<RegistrationResponse> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (enrollmentCode) headers['x-enrollment-code'] = enrollmentCode;
+
     const res = await fetch(`${this.base}/api/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ hostname, platform: detectPlatform(), appVersion, mac }),
     });
-    if (!res.ok) throw new Error(`register failed: ${res.status}`);
+    if (!res.ok) throw await this.responseError('register', res);
     return res.json();
   }
 
@@ -41,7 +62,7 @@ export class ApiService {
       },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`heartbeat failed: ${res.status}`);
+    if (!res.ok) throw await this.responseError('heartbeat', res);
     return res.json();
   }
 
@@ -59,14 +80,30 @@ export class ApiService {
       },
       body: JSON.stringify({ status, message }),
     });
-    if (!res.ok) throw new Error(`ack failed: ${res.status}`);
+    if (!res.ok) throw await this.responseError('ack', res);
   }
 
   async fetchMyConfig(creds: DeviceCreds): Promise<DeviceConfig> {
     const res = await fetch(`${this.base}/api/my/config`, {
       headers: { Authorization: `Bearer ${creds.token}` },
     });
-    if (!res.ok) throw new Error(`fetchMyConfig failed: ${res.status}`);
+    if (!res.ok) throw await this.responseError('fetchMyConfig', res);
+    return res.json();
+  }
+
+  async updateMyConfig(
+    creds: DeviceCreds,
+    patch: Partial<Pick<DeviceConfig, 'homepage' | 'zoomLevel'>>
+  ): Promise<DeviceConfigUpdateResponse> {
+    const res = await fetch(`${this.base}/api/my/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${creds.token}`,
+      },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw await this.responseError('updateMyConfig', res);
     return res.json();
   }
 
@@ -92,11 +129,22 @@ export class ApiService {
       // correct multipart boundary itself when the body is a FormData.
       body: formData,
     });
-    if (!res.ok) throw new Error(`uploadScreenshot failed: ${res.status}`);
+    if (!res.ok) throw await this.responseError('uploadScreenshot', res);
   }
 
   wsUrl(creds: DeviceCreds): string {
     const wsBase = this.base.replace(/^http/, 'ws');
     return `${wsBase}/ws?token=${encodeURIComponent(creds.token)}`;
+  }
+
+  private async responseError(operation: string, response: Response): Promise<Error> {
+    let detail = '';
+    try {
+      const body = (await response.json()) as { error?: string };
+      detail = body.error ? `: ${body.error}` : '';
+    } catch {
+      // The status code is still useful when the response is not JSON.
+    }
+    return new Error(`${operation} failed (${response.status})${detail}`);
   }
 }

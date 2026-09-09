@@ -4,14 +4,22 @@ import { ApiService } from './api.service';
 import { DeviceName } from '../plugins/device-name.plugin';
 import { DisplayMode } from '../plugins/display-mode.plugin';
 import type { DeviceCreds, DeviceConfig } from '../models/types';
+import { environment } from '../../environments/environment';
 
 // Point this at your Fastify server. In production, consider prompting for
 // this on very first boot instead of hardcoding it (e.g. a QR-code pairing
 // flow), but a build-time constant is the simplest thing that works.
-const SERVER_URL = 'https://testmobile.ijn.com.my';
-const APP_VERSION = '1.0.0';
 const DEFAULT_HOMEPAGE = 'https://example.com';
 const DEFAULT_ZOOM = 100;
+const DEFAULT_CONFIG: DeviceConfig = {
+  homepage: DEFAULT_HOMEPAGE,
+  reloadEverySeconds: null,
+  allowNavigation: false,
+  showCursor: false,
+  takeScreenshotEverySeconds: null,
+  autoUpdate: true,
+  zoomLevel: DEFAULT_ZOOM,
+};
 
 @Injectable({ providedIn: 'root' })
 export class AppStateService {
@@ -22,19 +30,20 @@ export class AppStateService {
   readonly hostname = signal('');
   readonly homepage = signal(DEFAULT_HOMEPAGE);
   readonly zoomLevel = signal(DEFAULT_ZOOM);
+  readonly remoteConfig = signal<DeviceConfig>(DEFAULT_CONFIG);
   readonly settingsOpen = signal(false);
-  readonly serverUrl = SERVER_URL;
+  readonly serverUrl = environment.kioskServerUrl.replace(/\/+$/, '');
 
   constructor(
     private storage: StorageService,
     private api: ApiService
   ) {
-    this.api.configure(SERVER_URL);
+    this.api.configure(this.serverUrl);
   }
 
   async initialize(): Promise<void> {
     try {
-      console.log('[kiosk] starting, server =', SERVER_URL);
+      console.log('[kiosk] starting, server =', this.serverUrl);
       await this.applyDisplayMode();
 
       this.step.set('checking stored credentials');
@@ -42,13 +51,22 @@ export class AppStateService {
       let host = await this.storage.getHostname();
       console.log('[kiosk] stored creds:', existing, 'hostname:', host);
 
+      let config = (await this.storage.getLastRemoteConfig()) ?? DEFAULT_CONFIG;
+
       if (!existing) {
         this.step.set('registering with server');
         host = await this.resolveDeviceHostname();
         const stableId = await this.resolveStableId();
         console.log('[kiosk] no stored creds — registering as', host, 'stableId:', stableId);
-        existing = await this.api.register(host, APP_VERSION, stableId ?? undefined);
-        console.log('[kiosk] register() succeeded:', existing);
+        const registration = await this.api.register(
+          host,
+          environment.appVersion,
+          environment.enrollmentCode,
+          stableId ?? undefined
+        );
+        console.log('[kiosk] register() succeeded; reused =', registration.reused);
+        existing = { deviceId: registration.deviceId, token: registration.token };
+        config = registration.config ?? config;
         await this.storage.setCreds(existing);
         await this.storage.setHostname(host);
       }
@@ -56,34 +74,21 @@ export class AppStateService {
       this.creds.set(existing);
       this.hostname.set(host ?? 'unknown-device');
 
-      this.step.set('resolving homepage');
-      const override = await this.storage.getUrlOverride();
-      if (override) {
-        console.log('[kiosk] using local URL override:', override);
-        this.homepage.set(override);
+      try {
+        this.step.set('fetching config from server');
+        config = await this.api.fetchMyConfig(existing);
+        console.log('[kiosk] fetchMyConfig() succeeded:', config);
+      } catch (cfgErr) {
+        console.log('[kiosk] fetchMyConfig() FAILED, using last saved config:', cfgErr);
       }
 
-      const zoomOverride = await this.storage.getZoomOverride();
-      if (zoomOverride !== null) {
-        console.log('[kiosk] using local zoom override:', zoomOverride);
-        this.zoomLevel.set(zoomOverride);
-      }
-
-      if (!override || zoomOverride === null) {
-        try {
-          this.step.set('fetching config from server');
-          const config: DeviceConfig = await this.api.fetchMyConfig(existing);
-          console.log('[kiosk] fetchMyConfig() succeeded:', config);
-          if (!override && config.homepage && config.homepage !== 'about:blank') {
-            this.homepage.set(config.homepage);
-          }
-          if (zoomOverride === null && config.zoomLevel) {
-            this.zoomLevel.set(config.zoomLevel);
-          }
-        } catch (cfgErr) {
-          console.log('[kiosk] fetchMyConfig() FAILED, using defaults:', cfgErr);
-        }
-      }
+      // Migrate installations from the old local-override model. The server
+      // config is now authoritative in both directions.
+      await Promise.all([
+        this.storage.setUrlOverride(null),
+        this.storage.setZoomOverride(null),
+      ]);
+      await this.applyRemoteConfig(config);
       this.step.set('done');
     } catch (err) {
       console.log('[kiosk] STARTUP FAILED:', err);
@@ -93,14 +98,75 @@ export class AppStateService {
     }
   }
 
-  async setUrlOverride(url: string | null): Promise<void> {
-    await this.storage.setUrlOverride(url);
-    this.homepage.set(url ?? DEFAULT_HOMEPAGE);
+  /** Saves the user-facing settings to the server and MySQL. Clearing the
+   * legacy local override keys makes the returned server config authoritative
+   * immediately and on every future launch. */
+  async updateConfigFromDevice(
+    patch: Partial<Pick<DeviceConfig, 'homepage' | 'zoomLevel'>>
+  ): Promise<DeviceConfig> {
+    const creds = this.creds();
+    if (!creds) throw new Error('device is not registered');
+
+    const result = await this.api.updateMyConfig(creds, patch);
+    const clearLegacyOverrides: Promise<void>[] = [];
+    if ('homepage' in patch) clearLegacyOverrides.push(this.storage.setUrlOverride(null));
+    if ('zoomLevel' in patch) clearLegacyOverrides.push(this.storage.setZoomOverride(null));
+    await Promise.all(clearLegacyOverrides);
+    await this.applyRemoteConfig(result.config);
+    return this.remoteConfig();
   }
 
-  async setZoomOverride(percent: number | null): Promise<void> {
-    await this.storage.setZoomOverride(percent);
-    this.zoomLevel.set(percent ?? DEFAULT_ZOOM);
+  async syncRemoteConfig(): Promise<DeviceConfig> {
+    const creds = this.creds();
+    if (!creds) throw new Error('device is not registered');
+    const config = await this.api.fetchMyConfig(creds);
+    await this.applyRemoteConfig(config);
+    return this.remoteConfig();
+  }
+
+  async applyRemoteConfig(config: Partial<DeviceConfig>): Promise<void> {
+    const normalized = this.normalizeRemoteConfig(config);
+    this.remoteConfig.set(normalized);
+    await this.storage.setLastRemoteConfig(normalized);
+
+    this.homepage.set(normalized.homepage);
+    this.zoomLevel.set(normalized.zoomLevel);
+  }
+
+  private normalizeRemoteConfig(config: Partial<DeviceConfig>): DeviceConfig {
+    const candidate = { ...DEFAULT_CONFIG, ...config };
+    let homepage = DEFAULT_HOMEPAGE;
+    try {
+      const parsed = new URL(candidate.homepage);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') homepage = parsed.toString();
+    } catch {
+      console.log('[kiosk] ignoring invalid remote homepage:', candidate.homepage);
+    }
+
+    const interval = (value: unknown, minimum: number): number | null =>
+      Number.isInteger(value) && (value as number) >= minimum && (value as number) <= 86_400
+        ? (value as number)
+        : null;
+
+    const zoomLevel =
+      Number.isInteger(candidate.zoomLevel) && candidate.zoomLevel >= 25 && candidate.zoomLevel <= 500
+        ? candidate.zoomLevel
+        : DEFAULT_ZOOM;
+
+    return {
+      homepage,
+      reloadEverySeconds: interval(candidate.reloadEverySeconds, 10),
+      allowNavigation:
+        typeof candidate.allowNavigation === 'boolean'
+          ? candidate.allowNavigation
+          : DEFAULT_CONFIG.allowNavigation,
+      showCursor:
+        typeof candidate.showCursor === 'boolean' ? candidate.showCursor : DEFAULT_CONFIG.showCursor,
+      takeScreenshotEverySeconds: interval(candidate.takeScreenshotEverySeconds, 30),
+      autoUpdate:
+        typeof candidate.autoUpdate === 'boolean' ? candidate.autoUpdate : DEFAULT_CONFIG.autoUpdate,
+      zoomLevel,
+    };
   }
 
   /**

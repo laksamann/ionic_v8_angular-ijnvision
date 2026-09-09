@@ -1,14 +1,21 @@
 <ion-app>
   @if (!appState.ready()) {
     <div class="boot-screen">
-      <ion-spinner name="crescent" color="light"></ion-spinner>
+      <div class="boot-brand">V</div>
+      <span class="boot-eyebrow">IJN VISION</span>
+      <h1>Preparing kiosk browser</h1>
+      <div class="boot-progress"><span></span></div>
       <p>{{ appState.step() }}</p>
     </div>
   } @else if (appState.error() || !appState.creds()) {
     <div class="boot-screen error">
-      <h2>Could not start kiosk:</h2>
-      <p>{{ appState.error() ?? 'no device credentials' }}</p>
-      <p>Check network and server URL, then restart.</p>
+      <div class="error-panel">
+        <div class="boot-brand">!</div>
+        <span class="boot-eyebrow">CONNECTION ERROR</span>
+        <h2>Could not start the kiosk</h2>
+        <p class="error-detail">{{ appState.error() ?? 'No device credentials' }}</p>
+        <p>Check the network and server URL, then restart the app.</p>
+      </div>
     </div>
   } @else if (appState.settingsOpen()) {
     <app-settings></app-settings>

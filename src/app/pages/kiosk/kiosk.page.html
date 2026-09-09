@@ -5,9 +5,8 @@
     </div>
   }
 
-  <div class="debug-banner">{{ url }}{{ useIframeFallback ? ' (iframe fallback)' : '' }}</div>
-
   @if (useIframeFallback) {
+    <div class="preview-badge">Browser preview · Native kiosk WebView activates on Android</div>
     <iframe
       #kioskFrame
       class="kiosk-frame"

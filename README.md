@@ -4,6 +4,27 @@ Ionic/Angular rewrite of the kiosk client, replacing the React Native build.
 Same feature set: fullscreen display of an assigned URL, live commands over
 WebSocket, a settings screen with D-pad/keyboard navigation.
 
+## Full kiosk browser behavior
+
+- The Ionic shell keeps its normal responsive viewport:
+  `width=device-width, initial-scale=1, viewport-fit=cover`. It has not been
+  removed.
+- The separate native content WebView presents loaded websites with a desktop
+  1920×1080 viewport and desktop user agent. The website's viewport tag is
+  rewritten for that native browser surface; it is not removed from the app.
+- The native browser always fills a complete 1920×1080 virtual canvas, even for
+  short pages, then scales that canvas to the physical TV resolution.
+- Android status/navigation bars are hidden using immersive mode and the screen
+  stays awake. A slim native progress bar appears during navigation.
+- A non-reference-counted Android Wi-Fi lock keeps the radio awake while the
+  kiosk app is running. Android 10+ uses low-latency mode; older devices use
+  high-performance mode. This prevents idle power-saving disconnects, but does
+  not override disabled Wi-Fi, Airplane Mode, weak signal, or AP outages.
+- JavaScript, DOM storage, cookies, third-party cookies, browser cache, media
+  autoplay and compatible mixed content are enabled for dashboard compatibility.
+- HTTP URLs are allowed for internal dashboards. Prefer HTTPS whenever a valid
+  internal certificate is available.
+
 **Verified in this environment:**
 - `ng build` (dev and production configurations) — clean, zero errors
 - `npx cap sync android` — recognizes `@capacitor/app` and `@capacitor/preferences`, copies web assets in
@@ -61,8 +82,8 @@ still won't display — but at least something shows instead of nothing.
 src/app/
   models/types.ts                    # mirrors kiosk-server/src/types.ts — keep in sync
   services/
-    storage.service.ts               # Capacitor Preferences: creds, URL override, hostname
-    api.service.ts                   # register / heartbeat / ack / fetch config
+    storage.service.ts               # Capacitor Preferences: credentials and cached config
+    api.service.ts                   # register / heartbeat / ack / fetch + update config
     kiosk-socket.service.ts          # WebSocket client, auto-reconnect w/ backoff
     app-state.service.ts             # boot sequence (register, resolve homepage), signals
     remote-back.service.ts           # back button -> opens settings (Capacitor App plugin)
@@ -72,7 +93,7 @@ src/app/
     kiosk-webview.plugin.ts          # JS wrapper for the native kiosk display WebView
   pages/
     kiosk/                           # thin loading/debug overlay — actual display is the native WebView
-    settings/                       # Wi-Fi / URL override / device info, arrow-key navigable
+    settings/                       # Wi-Fi / synchronized URL + zoom / device info
   app.ts / app.html / app.scss       # root: boot/error/kiosk/settings switching
 
 android/
@@ -84,12 +105,21 @@ android/
   app/src/main/res/drawable/tv_banner.png  # placeholder TV banner (320x180) — replace with real branding
 ```
 
-## Before you build: set your server URL
+## Before you build: set server and enrollment values
 
-Edit `src/app/services/app-state.service.ts`:
+Edit `src/environments/environment.ts`:
 ```ts
-const SERVER_URL = 'https://testmobile.ijn.com.my';
+export const environment = {
+  kioskServerUrl: 'https://testmobile.ijn.com.my',
+  enrollmentCode: '',
+  appVersion: '1.0.0',
+} as const;
 ```
+
+Leave `enrollmentCode` empty when the server's `ENROLLMENT_CODE` is empty. If
+enrollment protection is enabled, build the APK with the matching value and
+rotate or clear it on the server after enrollment; a value compiled into an
+APK should not be treated as a permanent secret.
 
 ## Build and run
 
@@ -100,7 +130,7 @@ npx cap sync android          # copies web build + plugins into the native proje
 cd android
 ./gradlew assembleDebug
 adb -s <tv-ip>:5555 install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s <tv-ip>:5555 shell am start -n com.kiosktvapp/.MainActivity
+adb -s <tv-ip>:5555 shell am start -n lm.ijn.kiosktvapp/.MainActivity
 ```
 
 **Important**: unlike a plain web app, `npx cap sync android` must be re-run
@@ -121,13 +151,18 @@ Same boot sequence as the RN version, with the same debug logging:
 Watch these via `adb logcat` — Capacitor forwards `console.log` from the
 WebView to Logcat under the tag `Capacitor/Console`.
 
-- **Homepage resolution order**: local URL override → server-assigned
-  `homepage` (rejecting `about:blank` the same way the RN version does) →
-  hardcoded fallback.
-- **Live commands**: `open_url`, `reload`, `clear_cache`, `update_config` are
-  handled in `kiosk.page.ts`. `reload`/`clear_cache` re-assign the iframe's
-  `src` (with a cache-busting query param for `clear_cache`), since an
-  `<iframe>` has no direct cache-clear API the way RN's `WebView` component did.
+- **Config synchronization**: the registration response is applied immediately,
+  the last good config is kept for offline startup, config is fetched again at
+  every WebSocket connection/reconnection, and live `update_config` commands
+  are applied without restarting the app.
+- **Two-way settings**: changing the assigned URL or zoom sends an authenticated
+  `PUT /api/my/config`. The server validates and saves it in MySQL, so the admin
+  dashboard and every future reconnect see the same value. Older local override
+  keys are cleared once during migration.
+- **Live commands**: `open_url`, `reload`, `clear_cache`, `restart_app`,
+  `screenshot`, `play_sound`, and `update_config` are handled in
+  `kiosk.page.ts`. Unsupported device-owner commands return a failed
+  acknowledgement instead of being reported as successful.
 - **Settings screen**: press the remote's back button — opens after a short
   delay (same approximation as the RN build; Capacitor's `backButton` event,
   like RN's `BackHandler`, fires once per press rather than giving true
@@ -135,16 +170,28 @@ WebView to Logcat under the tag `Capacitor/Console`.
   activates. The focus ring (`.focus-row:focus` in `settings.page.scss`) is
   the only "cursor" a remote user has, so it's intentionally high-contrast.
 
-## Deliberately stubbed / needs a native plugin
+## Remote configuration behavior
 
-Same categories as the RN build — recognized and acked, but not fully wired:
+| Field | Ionic/Android behavior |
+|---|---|
+| `homepage` | Loads in the native kiosk WebView; device edits sync back to MySQL. |
+| `reloadEverySeconds` | Reloads periodically; `null` disables it. |
+| `allowNavigation` | `false` keeps navigation on the assigned URL's origin; `true` allows external origins. |
+| `showCursor` | Injects `cursor: none` or restores the page cursor after every load. |
+| `takeScreenshotEverySeconds` | Captures and uploads the native WebView periodically; `null` disables it. |
+| `zoomLevel` | Applies native view-level zoom; device edits sync back to MySQL. |
+| `autoUpdate` | Saved and synchronized for contract compatibility; APK updating still needs an update-manifest/download endpoint and installer policy. |
 
-| Command | Current behavior | To make it real |
+Periodic work is replaced whenever config changes, so old timers do not remain
+active. Command and reconnect subscriptions are also disposed when the kiosk
+view closes for the settings screen.
+
+## Features that require Device Owner or update infrastructure
+
+| Feature | Current behavior | Requirement |
 |---|---|---|
-| `restart_app` | Reloads the iframe only | Not really meaningful for a WebView app the way a native process restart is |
-| `screenshot` | Not implemented | Would need a native plugin to capture the WebView's rendered output |
-| `reboot_device` / `shutdown_device` | Not implemented | Requires Device Owner (COSU) provisioning + a native plugin calling `DevicePolicyManager` |
-| `play_sound` | Not implemented | HTML5 `<audio>` element works for simple cases without any native plugin |
+| `reboot_device` / `shutdown_device` | Returns a failed acknowledgement | Device Owner/COSU provisioning plus a native `DevicePolicyManager` plugin |
+| `autoUpdate` | Config value is retained but does not install APKs | Signed update manifest, authenticated download, and managed/device-owner installation policy |
 | Real CPU/RAM/disk in heartbeat | Sent as zeros | Add the `@capacitor/device` plugin — see the comment in `device-info.service.ts` |
 
 ## Locking it down further (optional, for real kiosk deployments)
