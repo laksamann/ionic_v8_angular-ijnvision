@@ -1,18 +1,24 @@
 import { Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import { IonicModule } from '@ionic/angular';
 import { AppStateService } from '../../services/app-state.service';
 import { ApiService } from '../../services/api.service';
 import { KioskSocketService } from '../../services/kiosk-socket.service';
 import { StorageService } from '../../services/storage.service';
 import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
+import { NetworkMonitor } from '../../plugins/network-monitor.plugin';
+import type { NetworkStatus } from '../../plugins/network-monitor.plugin';
 import type { PluginListenerHandle } from '@capacitor/core';
 import type { Subscription } from 'rxjs';
-import type { Command, DeviceConfig } from '../../models/types';
+import type { Command, DeviceConfig, HeartbeatPayload } from '../../models/types';
 import { environment } from '../../../environments/environment';
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const APP_SESSION_STARTED_AT = new Date().toISOString();
+const APP_SESSION_ID = globalThis.crypto?.randomUUID?.() ??
+  `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 @Component({
   selector: 'app-kiosk',
@@ -27,6 +33,8 @@ export class KioskPage implements OnInit, OnDestroy {
   url = '';
   safeUrl: SafeResourceUrl = '';
   loading = true;
+  statusMessage = '';
+  statusTone: 'warning' | 'danger' = 'warning';
 
   /**
    * True when there's no native bridge at all (a plain browser, e.g.
@@ -54,6 +62,22 @@ export class KioskPage implements OnInit, OnDestroy {
   private appStartMs = Date.now();
   private listenerHandles: PluginListenerHandle[] = [];
   private subscriptions: Subscription[] = [];
+  private heartbeatInFlight = false;
+  private heartbeatSequence = 0;
+  private heartbeatFailed = false;
+  private appIsActive = true;
+  private queuedHeartbeatOverride: Partial<
+    Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>
+  > | null = null;
+  private networkStatus: NetworkStatus = {
+    connected: navigator.onLine,
+    networkState: navigator.onLine ? 'connected' : 'disconnected',
+    networkType: 'unknown',
+    ssid: null,
+    wifiPolicyStatus: 'unknown',
+    allowedSsids: [],
+    occurredAt: Date.now(),
+  };
 
   constructor(
     public appState: AppStateService,
@@ -117,6 +141,34 @@ export class KioskPage implements OnInit, OnDestroy {
     }
 
     await this.applyRuntimeConfig(this.appState.remoteConfig());
+
+    if (!this.useIframeFallback) {
+      try {
+        this.listenerHandles.push(
+          await NetworkMonitor.addListener('networkStatusChanged', (status) => {
+            void this.handleNetworkStatus(status);
+          })
+        );
+        const initialNetwork = await NetworkMonitor.startMonitoring({
+          allowedSsids: this.appState.remoteConfig().allowedSsids,
+        });
+        await this.handleNetworkStatus(initialNetwork, false);
+      } catch (err) {
+        console.log('[kiosk] native network monitor unavailable:', err);
+      }
+    }
+
+    this.listenerHandles.push(
+      await App.addListener('appStateChange', ({ isActive }) => {
+        this.appIsActive = isActive;
+        if (!isActive) {
+          void this.storage.setPendingDisconnectReason('app_backgrounded');
+          void this.tickHeartbeat({ appState: 'background', lastDisconnectReason: 'app_backgrounded' });
+        } else {
+          void this.tickHeartbeat({ appState: 'active' });
+        }
+      })
+    );
 
     const creds = this.appState.creds();
     if (!creds) return;
@@ -210,12 +262,23 @@ export class KioskPage implements OnInit, OnDestroy {
     }
   }
 
-  private async tickHeartbeat(): Promise<void> {
+  private async tickHeartbeat(
+    override: Partial<Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>> = {}
+  ): Promise<void> {
     const creds = this.appState.creds();
     if (!creds) return;
+    if (this.heartbeatInFlight) {
+      this.queuedHeartbeatOverride = { ...this.queuedHeartbeatOverride, ...override };
+      return;
+    }
+    this.heartbeatInFlight = true;
 
     try {
+      const pendingReason = await this.storage.getPendingDisconnectReason();
+      const sequence = ++this.heartbeatSequence;
       const res = await this.api.heartbeat(creds, {
+        sessionId: APP_SESSION_ID,
+        sessionStartedAt: APP_SESSION_STARTED_AT,
         cpu: 0, // see device-info.service.ts for how to wire up real readings
         ramUsedMb: 0,
         ramTotalMb: 0,
@@ -224,13 +287,75 @@ export class KioskPage implements OnInit, OnDestroy {
         currentUrl: this.url,
         uptimeSeconds: Math.round((Date.now() - this.appStartMs) / 1000),
         appVersion: environment.appVersion,
-        networkType: 'wifi',
+        networkType: this.networkStatus.networkType,
+        ssid: this.networkStatus.ssid,
+        wifiPolicyStatus: this.networkStatus.wifiPolicyStatus,
+        networkState: override.networkState ?? this.networkStatus.networkState,
+        appState: override.appState ?? (this.appIsActive ? 'active' : 'background'),
+        lastDisconnectReason: override.lastDisconnectReason ?? pendingReason,
+        clientSentAt: new Date().toISOString(),
+        sequence,
       });
+      if (res.heartbeatAck.sequence !== sequence) {
+        console.log('[kiosk] heartbeat ACK sequence mismatch:', res.heartbeatAck.sequence, sequence);
+      }
+      if (pendingReason) await this.storage.setPendingDisconnectReason(null);
+      if (this.heartbeatFailed) {
+        this.heartbeatFailed = false;
+        await this.showStatusAlert('Server connection restored. Heartbeat confirmed.', 'warning');
+      }
       for (const cmd of res.pendingCommands) {
         void this.handleCommand(cmd);
       }
-    } catch {
-      // offline — heartbeat retries on the next interval, WS reconnect handles the rest.
+    } catch (err) {
+      if (this.networkStatus.connected && !this.heartbeatFailed) {
+        this.heartbeatFailed = true;
+        await this.showStatusAlert('Server heartbeat failed. Device may be shown as offline.', 'danger');
+      }
+      console.log('[kiosk] heartbeat failed:', err);
+    } finally {
+      this.heartbeatInFlight = false;
+      if (this.queuedHeartbeatOverride) {
+        const queued = this.queuedHeartbeatOverride;
+        this.queuedHeartbeatOverride = null;
+        void this.tickHeartbeat(queued);
+      }
+    }
+  }
+
+  private async handleNetworkStatus(status: NetworkStatus, notify = true): Promise<void> {
+    const previous = this.networkStatus;
+    this.networkStatus = status;
+
+    if (!status.connected) {
+      await this.storage.setPendingDisconnectReason('network_lost');
+      this.statusMessage = 'Network connection lost — reconnecting automatically';
+      this.statusTone = 'danger';
+      void this.tickHeartbeat({ networkState: 'disconnected', lastDisconnectReason: 'network_lost' });
+      return;
+    }
+
+    if (status.wifiPolicyStatus === 'blocked') {
+      this.statusMessage = `Wrong Wi-Fi: ${status.ssid ?? 'unknown'}. Allowed: ${status.allowedSsids.join(', ')}`;
+      this.statusTone = 'danger';
+    } else if (status.wifiPolicyStatus === 'unknown' && status.networkType === 'wifi') {
+      this.statusMessage = 'Wi-Fi name unavailable — grant Nearby devices/location permission';
+      this.statusTone = 'warning';
+    } else {
+      this.statusMessage = '';
+    }
+
+    if (!previous.connected && notify && this.useIframeFallback) {
+      await this.showStatusAlert(`Network restored${status.ssid ? `: ${status.ssid}` : ''}.`, 'warning');
+    }
+    void this.tickHeartbeat({ networkState: 'connected' });
+  }
+
+  private async showStatusAlert(message: string, tone: 'warning' | 'danger'): Promise<void> {
+    this.statusMessage = message;
+    this.statusTone = tone;
+    if (!this.useIframeFallback) {
+      await NetworkMonitor.showAlert({ message }).catch(() => {});
     }
   }
 
@@ -304,6 +429,7 @@ export class KioskPage implements OnInit, OnDestroy {
         KioskWebView.setZoom({ percent: this.appState.zoomLevel() }),
         KioskWebView.setNavigationAllowed({ allowed: config.allowNavigation }),
         KioskWebView.setCursorVisible({ visible: config.showCursor }),
+        NetworkMonitor.updatePolicy({ allowedSsids: config.allowedSsids }),
       ]).catch((err) => console.log('[kiosk] applying native config failed:', err));
     }
 

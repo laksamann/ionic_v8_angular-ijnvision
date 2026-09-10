@@ -4,6 +4,29 @@ Ionic/Angular rewrite of the kiosk client, replacing the React Native build.
 Same feature set: fullscreen display of an assigned URL, live commands over
 WebSocket, a settings screen with D-pad/keyboard navigation.
 
+## Network monitoring
+
+The Android build monitors the default network and connected Wi-Fi SSID. The
+allowed SSID array comes from the device's remote config (`allowedSsids`), so
+admins can change policy without rebuilding the APK. Exact matches are allowed;
+any other SSID triggers a native Android Toast above the kiosk WebView and is
+reported to the server as `wrong_wifi`. An empty array allows any Wi-Fi.
+
+Android deliberately redacts SSID unless the user grants Nearby devices and
+precise-location access (and location services are enabled). The app requests
+the required permission on first launch. Managed kiosk deployments should
+pre-grant both permissions through their device-management policy.
+
+The app sends a REST heartbeat every 15 seconds and verifies the server's ACK
+sequence. It also answers WebSocket `ping` messages with `pong`. Network loss,
+recovery, wrong Wi-Fi, and server-heartbeat changes produce native status
+alerts. A pending network-loss reason is kept in Capacitor Preferences and sent
+after connectivity returns.
+
+Each app start creates a new heartbeat session ID. The Fastify server updates
+one database row for that session instead of inserting a row for every
+heartbeat, substantially reducing database growth on always-on kiosk devices.
+
 ## Full kiosk browser behavior
 
 - The Ionic shell keeps its normal responsive viewport:

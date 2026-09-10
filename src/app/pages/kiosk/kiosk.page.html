@@ -1,4 +1,9 @@
 <div class="kiosk-content">
+  @if (statusMessage) {
+    <div class="status-alert" [class.danger]="statusTone === 'danger'" role="alert">
+      <span class="status-alert-dot"></span>{{ statusMessage }}
+    </div>
+  }
   @if (loading) {
     <div class="loading-overlay">
       <ion-spinner name="crescent" color="light"></ion-spinner>

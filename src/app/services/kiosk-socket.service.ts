@@ -19,6 +19,7 @@ export class KioskSocketService {
   readonly command$ = new Subject<Command>();
   readonly open$ = new Subject<void>();
   readonly close$ = new Subject<void>();
+  readonly heartbeatAck$ = new Subject<{ sequence?: number; serverTime: string; offlineAfterSeconds: number }>();
 
   connect(url: string): void {
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
@@ -48,6 +49,11 @@ export class KioskSocketService {
       if (msg.type === 'command') {
         this.command$.next(msg.command);
       }
+      if (msg.type === 'ping' && this.ws?.readyState === WebSocket.OPEN) {
+        const pong: WSMessage = { type: 'pong', nonce: msg.nonce, clientTime: new Date().toISOString() };
+        this.ws.send(JSON.stringify(pong));
+      }
+      if (msg.type === 'heartbeat_ack') this.heartbeatAck$.next(msg);
     };
 
     ws.onclose = () => {

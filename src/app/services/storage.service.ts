@@ -11,6 +11,7 @@ const KEYS = {
   zoomOverride: 'kiosk:zoomOverride',
   rotationDegrees: 'kiosk:rotationDegrees',
   lastRemoteConfig: 'kiosk:lastRemoteConfig',
+  pendingDisconnectReason: 'kiosk:pendingDisconnectReason',
 } as const;
 
 @Injectable({ providedIn: 'root' })
@@ -47,6 +48,16 @@ export class StorageService {
 
   async setLastRemoteConfig(config: DeviceConfig): Promise<void> {
     await Preferences.set({ key: KEYS.lastRemoteConfig, value: JSON.stringify(config) });
+  }
+
+  async getPendingDisconnectReason(): Promise<'network_lost' | 'app_backgrounded' | null> {
+    const { value } = await Preferences.get({ key: KEYS.pendingDisconnectReason });
+    return value === 'network_lost' || value === 'app_backgrounded' ? value : null;
+  }
+
+  async setPendingDisconnectReason(reason: 'network_lost' | 'app_backgrounded' | null): Promise<void> {
+    if (reason) await Preferences.set({ key: KEYS.pendingDisconnectReason, value: reason });
+    else await Preferences.remove({ key: KEYS.pendingDisconnectReason });
   }
 
   /** Legacy keys retained only to migrate installs made before two-way sync. */

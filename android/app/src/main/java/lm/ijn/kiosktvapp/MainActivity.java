@@ -24,6 +24,7 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(com.kiosktvapp.KioskWebViewPlugin.class);
     registerPlugin(com.kiosktvapp.DeviceNamePlugin.class);
     registerPlugin(com.kiosktvapp.DisplayModePlugin.class);
+    registerPlugin(com.kiosktvapp.NetworkMonitorPlugin.class);
     super.onCreate(savedInstanceState);
 
     // Behave like a dedicated kiosk browser: draw edge-to-edge, hide both
@@ -53,13 +54,13 @@ public class MainActivity extends BridgeActivity {
   }
 
   @Override
-  public void onResume() {
+  protected void onResume() {
     super.onResume();
     acquireWifiLock();
   }
 
   @Override
-  public void onDestroy() {
+  protected void onDestroy() {
     if (wifiLock != null && wifiLock.isHeld()) {
       wifiLock.release();
     }

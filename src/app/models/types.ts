@@ -14,6 +14,8 @@ export interface RegistrationResponse extends DeviceCreds {
 }
 
 export interface HeartbeatPayload {
+  sessionId: string;
+  sessionStartedAt: string;
   cpu: number;
   ramUsedMb: number;
   ramTotalMb: number;
@@ -23,6 +25,13 @@ export interface HeartbeatPayload {
   uptimeSeconds: number;
   appVersion: string;
   networkType?: 'wifi' | 'ethernet' | 'unknown';
+  ssid?: string | null;
+  wifiPolicyStatus?: 'allowed' | 'blocked' | 'unknown' | 'not_wifi';
+  networkState?: 'connected' | 'disconnected' | 'unknown';
+  appState?: 'active' | 'background';
+  lastDisconnectReason?: 'network_lost' | 'app_backgrounded' | null;
+  clientSentAt?: string;
+  sequence?: number;
 }
 
 export type CommandType =
@@ -55,6 +64,7 @@ export interface DeviceConfig {
   takeScreenshotEverySeconds: number | null;
   autoUpdate: boolean;
   zoomLevel: number;
+  allowedSsids: string[];
 }
 
 export type WSMessage =
@@ -62,4 +72,6 @@ export type WSMessage =
   | { type: 'command'; command: Command }
   | { type: 'command_ack'; commandId: string; status: 'acked' | 'failed'; message?: string }
   | { type: 'heartbeat'; payload: HeartbeatPayload }
-  | { type: 'pong' };
+  | { type: 'heartbeat_ack'; sequence?: number; serverTime: string; offlineAfterSeconds: number }
+  | { type: 'ping'; nonce: string; serverTime: string }
+  | { type: 'pong'; nonce?: string; clientTime?: string };

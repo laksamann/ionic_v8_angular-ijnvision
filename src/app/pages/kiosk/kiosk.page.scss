@@ -49,3 +49,37 @@
   text-overflow: ellipsis;
   pointer-events: none;
 }
+
+.status-alert {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(760px, calc(100vw - 36px));
+  padding: 13px 18px;
+  border: 1px solid rgba(251, 191, 36, .55);
+  border-radius: 12px;
+  background: rgba(69, 45, 5, .94);
+  color: #fef3c7;
+  font: 600 15px/1.35 system-ui, sans-serif;
+  box-shadow: 0 14px 45px rgba(0, 0, 0, .42);
+  transform: translateX(-50%);
+}
+
+.status-alert.danger {
+  border-color: rgba(248, 113, 113, .62);
+  background: rgba(69, 10, 10, .95);
+  color: #fee2e2;
+}
+
+.status-alert-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, .10);
+}

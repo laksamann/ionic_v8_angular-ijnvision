@@ -19,6 +19,7 @@ const DEFAULT_CONFIG: DeviceConfig = {
   takeScreenshotEverySeconds: null,
   autoUpdate: true,
   zoomLevel: DEFAULT_ZOOM,
+  allowedSsids: [],
 };
 
 @Injectable({ providedIn: 'root' })
@@ -166,6 +167,9 @@ export class AppStateService {
       autoUpdate:
         typeof candidate.autoUpdate === 'boolean' ? candidate.autoUpdate : DEFAULT_CONFIG.autoUpdate,
       zoomLevel,
+      allowedSsids: Array.isArray(candidate.allowedSsids)
+        ? [...new Set(candidate.allowedSsids.filter((ssid): ssid is string => typeof ssid === 'string').map((ssid) => ssid.trim()).filter(Boolean))]
+        : [],
     };
   }
 

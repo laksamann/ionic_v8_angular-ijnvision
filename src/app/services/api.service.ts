@@ -19,6 +19,11 @@ function detectPlatform(): Platform {
 export interface PendingCommandsResponse {
   ok: true;
   pendingCommands: Command[];
+  heartbeatAck: {
+    sequence?: number;
+    serverTime: string;
+    offlineAfterSeconds: number;
+  };
 }
 
 export interface DeviceConfigUpdateResponse {
