@@ -53,13 +53,13 @@ public class MainActivity extends BridgeActivity {
   }
 
   @Override
-  protected void onResume() {
+  public void onResume() {
     super.onResume();
     acquireWifiLock();
   }
 
   @Override
-  protected void onDestroy() {
+  public void onDestroy() {
     if (wifiLock != null && wifiLock.isHeld()) {
       wifiLock.release();
     }
