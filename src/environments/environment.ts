@@ -7,5 +7,5 @@
 export const environment = {
   kioskServerUrl: 'https://testmobile.ijn.com.my',
   enrollmentCode: '',
-  appVersion: '1.2.0',
+  appVersion: '1.3.0',
 } as const;

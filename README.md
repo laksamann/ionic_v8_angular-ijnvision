@@ -7,6 +7,8 @@ WebSocket, a settings screen with D-pad/keyboard navigation.
 ## Network monitoring
 
 The Android build monitors the default network and connected Wi-Fi SSID. The
+last verified SSID is retained while the same Wi-Fi transport remains connected,
+because Android may redact `WifiInfo` when the activity moves to the background.
 allowed SSID array comes from the device's remote config (`allowedSsids`), so
 admins can change policy without rebuilding the APK. Exact matches are allowed;
 any other SSID triggers a native Android Toast above the kiosk WebView and is
@@ -203,7 +205,7 @@ WebView to Logcat under the tag `Capacitor/Console`.
 | `showCursor` | Injects `cursor: none` or restores the page cursor after every load. |
 | `takeScreenshotEverySeconds` | Captures and uploads the native WebView periodically; `null` disables it. |
 | `zoomLevel` | Applies native view-level zoom; device edits sync back to MySQL. |
-| `autoUpdate` | Saved and synchronized for contract compatibility; APK updating still needs an update-manifest/download endpoint and installer policy. |
+| `autoUpdate` | Supports admin-triggered, authenticated APK download with SHA-256 verification. Android shows package-installer confirmation unless the device is system-managed. |
 
 Periodic work is replaced whenever config changes, so old timers do not remain
 active. Command and reconnect subscriptions are also disposed when the kiosk
@@ -214,7 +216,7 @@ view closes for the settings screen.
 | Feature | Current behavior | Requirement |
 |---|---|---|
 | `reboot_device` / `shutdown_device` | Returns a failed acknowledgement | Device Owner/COSU provisioning plus a native `DevicePolicyManager` plugin |
-| `autoUpdate` | Config value is retained but does not install APKs | Signed update manifest, authenticated download, and managed/device-owner installation policy |
+| Silent APK installation | Opens Android's verified package-installer flow | Device Owner/system provisioning is required to remove confirmation |
 | Real CPU/RAM/disk in heartbeat | Sent as zeros | Add the `@capacitor/device` plugin — see the comment in `device-info.service.ts` |
 
 ## Locking it down further (optional, for real kiosk deployments)

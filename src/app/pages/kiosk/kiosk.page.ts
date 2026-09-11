@@ -9,6 +9,7 @@ import { KioskSocketService } from '../../services/kiosk-socket.service';
 import { StorageService } from '../../services/storage.service';
 import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
 import { NetworkMonitor } from '../../plugins/network-monitor.plugin';
+import { AppUpdate } from '../../plugins/app-update.plugin';
 import type { NetworkStatus } from '../../plugins/network-monitor.plugin';
 import type { PluginListenerHandle } from '@capacitor/core';
 import type { Subscription } from 'rxjs';
@@ -62,7 +63,7 @@ export class KioskPage implements OnInit, OnDestroy {
   private appStartMs = Date.now();
   private listenerHandles: PluginListenerHandle[] = [];
   private subscriptions: Subscription[] = [];
-  private heartbeatInFlight = false;
+  private heartbeatRequestsInFlight = 0;
   private heartbeatSequence = 0;
   private heartbeatFailed = false;
   private appIsActive = true;
@@ -163,7 +164,12 @@ export class KioskPage implements OnInit, OnDestroy {
         this.appIsActive = isActive;
         if (!isActive) {
           void this.storage.setPendingDisconnectReason('app_backgrounded');
-          void this.tickHeartbeat({ appState: 'background', lastDisconnectReason: 'app_backgrounded' });
+          // Urgent + fetch keepalive makes the final lifecycle heartbeat much
+          // more likely to finish while Android is pausing the WebView.
+          void this.tickHeartbeat(
+            { appState: 'background', lastDisconnectReason: 'app_backgrounded' },
+            true
+          );
         } else {
           void this.tickHeartbeat({ appState: 'active' });
         }
@@ -263,15 +269,16 @@ export class KioskPage implements OnInit, OnDestroy {
   }
 
   private async tickHeartbeat(
-    override: Partial<Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>> = {}
+    override: Partial<Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>> = {},
+    urgent = false
   ): Promise<void> {
     const creds = this.appState.creds();
     if (!creds) return;
-    if (this.heartbeatInFlight) {
+    if (this.heartbeatRequestsInFlight > 0 && !urgent) {
       this.queuedHeartbeatOverride = { ...this.queuedHeartbeatOverride, ...override };
       return;
     }
-    this.heartbeatInFlight = true;
+    this.heartbeatRequestsInFlight += 1;
 
     try {
       const pendingReason = await this.storage.getPendingDisconnectReason();
@@ -295,7 +302,7 @@ export class KioskPage implements OnInit, OnDestroy {
         lastDisconnectReason: override.lastDisconnectReason ?? pendingReason,
         clientSentAt: new Date().toISOString(),
         sequence,
-      });
+      }, urgent);
       if (res.heartbeatAck.sequence !== sequence) {
         console.log('[kiosk] heartbeat ACK sequence mismatch:', res.heartbeatAck.sequence, sequence);
       }
@@ -314,8 +321,8 @@ export class KioskPage implements OnInit, OnDestroy {
       }
       console.log('[kiosk] heartbeat failed:', err);
     } finally {
-      this.heartbeatInFlight = false;
-      if (this.queuedHeartbeatOverride) {
+      this.heartbeatRequestsInFlight = Math.max(0, this.heartbeatRequestsInFlight - 1);
+      if (this.heartbeatRequestsInFlight === 0 && this.queuedHeartbeatOverride) {
         const queued = this.queuedHeartbeatOverride;
         this.queuedHeartbeatOverride = null;
         void this.tickHeartbeat(queued);
@@ -400,6 +407,18 @@ export class KioskPage implements OnInit, OnDestroy {
         case 'reboot_device':
         case 'shutdown_device':
           throw new Error(`${command.type} requires Android Device Owner provisioning`);
+        case 'install_apk': {
+          if (this.useIframeFallback) throw new Error('APK installation is only available on Android');
+          const downloadPath = command.payload['downloadPath'] as string;
+          const sha256 = command.payload['sha256'] as string;
+          if (!downloadPath || !sha256) throw new Error('install_apk requires downloadPath and sha256');
+          await AppUpdate.downloadAndInstall({
+            url: this.api.apkDownloadUrl(downloadPath),
+            token: creds.token,
+            sha256,
+          });
+          break;
+        }
       }
       this.socket.sendAck(command.id, 'acked');
       await this.api.ackCommand(creds, command.id, 'acked').catch(() => {});

@@ -34,6 +34,10 @@ public class NetworkMonitorPlugin extends Plugin {
   private ConnectivityManager connectivityManager;
   private ConnectivityManager.NetworkCallback networkCallback;
   private String lastSignature = "";
+  // Android may redact WifiInfo as soon as the activity is backgrounded.
+  // Keep the last verified SSID while the same Wi-Fi transport is still
+  // connected; clear it only after a real network loss or transport change.
+  private String lastKnownSsid = null;
 
   @PluginMethod
   public void startMonitoring(PluginCall call) {
@@ -137,6 +141,10 @@ public class NetworkMonitorPlugin extends Plugin {
         if (manager != null) info = manager.getConnectionInfo();
       }
       if (info != null) ssid = cleanSsid(info.getSSID());
+      if (ssid != null) lastKnownSsid = ssid;
+      else ssid = lastKnownSsid;
+    } else {
+      lastKnownSsid = null;
     }
 
     String type = wifi ? "wifi" : (ethernet ? "ethernet" : "unknown");
@@ -152,6 +160,7 @@ public class NetworkMonitorPlugin extends Plugin {
   }
 
   private JSObject disconnectedStatus() {
+    lastKnownSsid = null;
     JSObject result = new JSObject();
     result.put("connected", false);
     result.put("networkState", "disconnected");

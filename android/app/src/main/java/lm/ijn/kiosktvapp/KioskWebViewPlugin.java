@@ -13,6 +13,7 @@ import android.webkit.WebSettings;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -135,6 +136,20 @@ public class KioskWebViewPlugin extends Plugin {
       kioskWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
       kioskWebView.setFocusable(true);
       kioskWebView.setFocusableInTouchMode(true);
+      kioskWebView.setHorizontalScrollBarEnabled(false);
+      kioskWebView.setVerticalScrollBarEnabled(false);
+      kioskWebView.setOnKeyListener((view, keyCode, event) -> {
+        if (event.getAction() != KeyEvent.ACTION_DOWN || event.getRepeatCount() > 0) return false;
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+          moveCarousel(-1);
+          return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+          moveCarousel(1);
+          return true;
+        }
+        return false;
+      });
 
       android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
       getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(dm);
@@ -380,6 +395,44 @@ public class KioskWebViewPlugin extends Plugin {
     );
   }
 
+  /** Maps TV D-pad Left/Right to the common carousel APIs and controls used
+   * by Bootstrap, Swiper, Slick and generic accessible sliders. If no known
+   * carousel is present, the page receives a normal ArrowLeft/ArrowRight
+   * keyboard event so custom sites can handle it themselves. */
+  private void moveCarousel(int direction) {
+    if (kioskWebView == null) return;
+    String dir = direction < 0 ? "-1" : "1";
+    kioskWebView.evaluateJavascript(
+      "(function(d){" +
+        "var handled=false,root=null,visible=function(e){return !!(e&&e.getClientRects().length);};" +
+        "var roots=document.querySelectorAll('.carousel,.swiper,.swiper-container,.slick-slider,[role=region][aria-roledescription=carousel]');" +
+        "for(var i=0;i<roots.length;i++){if(visible(roots[i])){root=roots[i];break;}}" +
+        "if(root&&root.swiper){d<0?root.swiper.slidePrev():root.swiper.slideNext();handled=true;}" +
+        "if(!handled&&root&&root.slick&&typeof root.slick==='function'){root.slick(d<0?'slickPrev':'slickNext');handled=true;}" +
+        "if(!handled){var selectors=d<0?'.carousel-control-prev,.swiper-button-prev,.slick-prev,[data-bs-slide=prev],[aria-label*=Previous i]':'.carousel-control-next,.swiper-button-next,.slick-next,[data-bs-slide=next],[aria-label*=Next i]';" +
+          "var buttons=(root||document).querySelectorAll(selectors);for(var j=0;j<buttons.length;j++){if(visible(buttons[j])){buttons[j].click();handled=true;break;}}}" +
+        "if(!handled&&root&&window.bootstrap&&bootstrap.Carousel){var c=bootstrap.Carousel.getOrCreateInstance(root);d<0?c.prev():c.next();handled=true;}" +
+        "if(!handled){var key=d<0?'ArrowLeft':'ArrowRight',code=d<0?37:39,target=document.activeElement||document.body;" +
+          "target.dispatchEvent(new KeyboardEvent('keydown',{key:key,code:key,keyCode:code,which:code,bubbles:true}));" +
+          "target.dispatchEvent(new KeyboardEvent('keyup',{key:key,code:key,keyCode:code,which:code,bubbles:true}));}" +
+      "})(" + dir + ")",
+      null
+    );
+  }
+
+  /** Removes the browser-default document gutter that otherwise appears as
+   * a white strip around pages without their own reset stylesheet. */
+  private void applyFullBleedPageStyle() {
+    if (kioskWebView == null) return;
+    kioskWebView.evaluateJavascript(
+      "(function(){var id='ijn-kiosk-full-bleed',s=document.getElementById(id);" +
+        "if(!s){s=document.createElement('style');s.id=id;s.textContent=" +
+        "'html,body{margin:0!important;padding:0!important;min-width:100%!important;min-height:100%!important;overflow-x:hidden!important;}';" +
+        "(document.head||document.documentElement).appendChild(s);}})()",
+      null
+    );
+  }
+
   private String originOf(String rawUrl) {
     try {
       Uri uri = Uri.parse(rawUrl);
@@ -465,6 +518,7 @@ public class KioskWebViewPlugin extends Plugin {
       // automatically). The virtual canvas remains full 1920x1080 so short
       // pages still occupy a real browser-sized viewport.
       applyCursorStyle();
+      applyFullBleedPageStyle();
       JSObject data = new JSObject();
       data.put("url", url);
       notifyListeners("pageLoadFinished", data);

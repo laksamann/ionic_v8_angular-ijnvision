@@ -58,7 +58,11 @@ export class ApiService {
     return res.json();
   }
 
-  async heartbeat(creds: DeviceCreds, payload: HeartbeatPayload): Promise<PendingCommandsResponse> {
+  async heartbeat(
+    creds: DeviceCreds,
+    payload: HeartbeatPayload,
+    keepalive = false
+  ): Promise<PendingCommandsResponse> {
     const res = await fetch(`${this.base}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -66,6 +70,7 @@ export class ApiService {
         Authorization: `Bearer ${creds.token}`,
       },
       body: JSON.stringify(payload),
+      keepalive,
     });
     if (!res.ok) throw await this.responseError('heartbeat', res);
     return res.json();
@@ -135,6 +140,10 @@ export class ApiService {
       body: formData,
     });
     if (!res.ok) throw await this.responseError('uploadScreenshot', res);
+  }
+
+  apkDownloadUrl(downloadPath: string): string {
+    return new URL(downloadPath, `${this.base}/`).toString();
   }
 
   wsUrl(creds: DeviceCreds): string {
