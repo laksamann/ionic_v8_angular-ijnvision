@@ -4,6 +4,13 @@ Ionic/Angular rewrite of the kiosk client, replacing the React Native build.
 Same feature set: fullscreen display of an assigned URL, live commands over
 WebSocket, a settings screen with D-pad/keyboard navigation.
 
+## Clean Android build
+
+Use `npm run cap:build:android`. It removes generated Gradle output first,
+preventing `compressDebugAssets` errors such as "ZIP already contains entry
+assets/public/main-*.js" after Capacitor assets change. Do not extract this
+project over an older copy; extract it into a clean folder.
+
 ## Network monitoring
 
 The Android build monitors the default network and connected Wi-Fi SSID. The
@@ -135,7 +142,7 @@ android/
 Edit `src/environments/environment.ts`:
 ```ts
 export const environment = {
-  kioskServerUrl: 'https://vision-api.ijn.com.my',
+  kioskServerUrl: 'https://testmobile.ijn.com.my',
   enrollmentCode: '',
   appVersion: '1.0.0',
 } as const;
@@ -167,7 +174,7 @@ it doesn't reference `dist/` live.
 
 Same boot sequence as the RN version, with the same debug logging:
 ```
-[kiosk] starting, server = https://vision-api.ijn.com.my
+[kiosk] starting, server = https://testmobile.ijn.com.my
 [kiosk] stored creds: ...
 [kiosk] no stored creds — registering as tv-xxxxx
 [kiosk] register() succeeded: {...}

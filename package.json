@@ -1,13 +1,14 @@
 {
   "name": "kiosk-ionic-app",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "cap:build:android": "ionic cap build android --project=app --no-open",
+    "cap:clean:android": "node -e \"for(const p of ['android/app/build','android/build','android/capacitor-cordova-android-plugins/build'])require('fs').rmSync(p,{recursive:true,force:true})\"",
+    "cap:build:android": "npm run cap:clean:android && ionic cap build android --project=app --no-open",
     "cap:sync:android": "ionic cap sync android --project=app"
   },
   "prettier": {

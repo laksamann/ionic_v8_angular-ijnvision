@@ -5,7 +5,7 @@
  * not a secure secret store.
  */
 export const environment = {
-  kioskServerUrl: 'https://vision-api.ijn.com.my',
+  kioskServerUrl: 'https://testmobile.ijn.com.my',
   enrollmentCode: '',
-  appVersion: '1.3.2',
+  appVersion: '1.3.3',
 } as const;
