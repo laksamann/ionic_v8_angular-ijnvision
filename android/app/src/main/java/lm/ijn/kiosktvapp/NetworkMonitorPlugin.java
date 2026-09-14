@@ -5,6 +5,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.LinkProperties;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -20,7 +21,14 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 
 @CapacitorPlugin(
   name = "NetworkMonitor",
@@ -34,6 +42,10 @@ public class NetworkMonitorPlugin extends Plugin {
   private ConnectivityManager connectivityManager;
   private ConnectivityManager.NetworkCallback networkCallback;
   private String lastSignature = "";
+  // Android may redact WifiInfo as soon as the activity is backgrounded.
+  // Keep the last verified SSID while the same Wi-Fi transport is still
+  // connected; clear it only after a real network loss or transport change.
+  private String lastKnownSsid = null;
 
   @PluginMethod
   public void startMonitoring(PluginCall call) {
@@ -137,6 +149,10 @@ public class NetworkMonitorPlugin extends Plugin {
         if (manager != null) info = manager.getConnectionInfo();
       }
       if (info != null) ssid = cleanSsid(info.getSSID());
+      if (ssid != null) lastKnownSsid = ssid;
+      else ssid = lastKnownSsid;
+    } else {
+      lastKnownSsid = null;
     }
 
     String type = wifi ? "wifi" : (ethernet ? "ethernet" : "unknown");
@@ -145,6 +161,7 @@ public class NetworkMonitorPlugin extends Plugin {
     result.put("networkState", connected ? "connected" : "disconnected");
     result.put("networkType", type);
     result.put("ssid", ssid);
+    result.put("interfaces", readNetworkInterfaces());
     result.put("wifiPolicyStatus", policy);
     result.put("allowedSsids", new JSArray(allowedSsids));
     result.put("occurredAt", System.currentTimeMillis());
@@ -152,11 +169,13 @@ public class NetworkMonitorPlugin extends Plugin {
   }
 
   private JSObject disconnectedStatus() {
+    lastKnownSsid = null;
     JSObject result = new JSObject();
     result.put("connected", false);
     result.put("networkState", "disconnected");
     result.put("networkType", "unknown");
     result.put("ssid", (String) null);
+    result.put("interfaces", readNetworkInterfaces());
     result.put("wifiPolicyStatus", "unknown");
     result.put("allowedSsids", new JSArray(allowedSsids));
     result.put("occurredAt", System.currentTimeMillis());
@@ -175,6 +194,88 @@ public class NetworkMonitorPlugin extends Plugin {
       return value.substring(1, value.length() - 1);
     }
     return value;
+  }
+
+  /**
+   * Reports every non-loopback interface exposed by Android instead of
+   * guessing one device IP or treating the stable Android ID as a MAC.
+   * A TV can have wlan0 and eth0 at the same time, and VPN/USB adapters can
+   * add more entries, so this deliberately returns a structured array.
+   */
+  private JSArray readNetworkInterfaces() {
+    JSArray result = new JSArray();
+    Set<String> activeNames = new HashSet<>();
+
+    try {
+      if (connectivityManager != null) {
+        for (Network network : connectivityManager.getAllNetworks()) {
+          LinkProperties properties = connectivityManager.getLinkProperties(network);
+          if (properties != null && properties.getInterfaceName() != null) {
+            activeNames.add(properties.getInterfaceName());
+          }
+        }
+      }
+
+      Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+      if (interfaces == null) return result;
+      while (interfaces.hasMoreElements()) {
+        NetworkInterface networkInterface = interfaces.nextElement();
+        if (networkInterface.isLoopback()) continue;
+
+        JSArray ipv4 = new JSArray();
+        JSArray ipv6 = new JSArray();
+        Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+        while (addresses.hasMoreElements()) {
+          InetAddress address = addresses.nextElement();
+          if (address.isLoopbackAddress()) continue;
+          if (address instanceof Inet4Address) ipv4.put(address.getHostAddress());
+          else if (address instanceof Inet6Address) ipv6.put(address.getHostAddress());
+        }
+
+        byte[] hardware = networkInterface.getHardwareAddress();
+        String macAddress = formatMacAddress(hardware);
+        // Omit empty software placeholders, but retain down physical
+        // interfaces when Android exposes a MAC so wired + Wi-Fi are visible.
+        if (ipv4.length() == 0 && ipv6.length() == 0 && macAddress == null) continue;
+
+        JSObject item = new JSObject();
+        item.put("name", networkInterface.getName());
+        item.put("displayName", networkInterface.getDisplayName());
+        item.put("type", interfaceType(networkInterface.getName()));
+        item.put("active", activeNames.contains(networkInterface.getName()));
+        item.put("up", networkInterface.isUp());
+        item.put("virtual", networkInterface.isVirtual());
+        item.put("macAddress", macAddress);
+        item.put("ipv4Addresses", ipv4);
+        item.put("ipv6Addresses", ipv6);
+        result.put(item);
+      }
+    } catch (Exception ignored) {
+      // Returning the interfaces collected so far is safer than failing the
+      // entire heartbeat on vendor-specific Android networking restrictions.
+    }
+    return result;
+  }
+
+  private String formatMacAddress(byte[] hardware) {
+    if (hardware == null || hardware.length == 0) return null;
+    StringBuilder value = new StringBuilder();
+    for (byte part : hardware) {
+      if (value.length() > 0) value.append(':');
+      value.append(String.format(java.util.Locale.US, "%02X", part & 0xff));
+    }
+    String mac = value.toString();
+    if ("00:00:00:00:00:00".equals(mac) || "02:00:00:00:00:00".equals(mac)) return null;
+    return mac;
+  }
+
+  private String interfaceType(String name) {
+    String normalized = name == null ? "" : name.toLowerCase(java.util.Locale.US);
+    if (normalized.startsWith("wlan") || normalized.startsWith("wifi")) return "wifi";
+    if (normalized.startsWith("eth") || normalized.startsWith("en")) return "ethernet";
+    if (normalized.startsWith("rmnet") || normalized.startsWith("ccmni") || normalized.startsWith("pdp")) return "cellular";
+    if (normalized.startsWith("tun") || normalized.startsWith("tap") || normalized.startsWith("ppp")) return "vpn";
+    return "other";
   }
 
   private void publish(JSObject status, boolean force) {

@@ -22,6 +22,16 @@ export interface KioskWebViewPlugin {
     eventName: 'pageLoadError',
     listenerFunc: (data: { url: string; description: string }) => void
   ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'consoleMessage',
+    listenerFunc: (data: {
+      level: string;
+      message: string;
+      source: string;
+      line: number;
+      timestamp: number;
+    }) => void
+  ): Promise<PluginListenerHandle>;
 }
 
 /**

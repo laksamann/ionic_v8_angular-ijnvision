@@ -32,6 +32,14 @@ export interface DeviceConfigUpdateResponse {
   updatedFields: Array<'homepage' | 'zoomLevel'>;
 }
 
+export interface DeviceConsoleEntry {
+  level: string;
+  message: string;
+  source: string;
+  line: number;
+  timestamp: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private base = '';
@@ -58,7 +66,11 @@ export class ApiService {
     return res.json();
   }
 
-  async heartbeat(creds: DeviceCreds, payload: HeartbeatPayload): Promise<PendingCommandsResponse> {
+  async heartbeat(
+    creds: DeviceCreds,
+    payload: HeartbeatPayload,
+    keepalive = false
+  ): Promise<PendingCommandsResponse> {
     const res = await fetch(`${this.base}/heartbeat`, {
       method: 'POST',
       headers: {
@@ -66,6 +78,7 @@ export class ApiService {
         Authorization: `Bearer ${creds.token}`,
       },
       body: JSON.stringify(payload),
+      keepalive,
     });
     if (!res.ok) throw await this.responseError('heartbeat', res);
     return res.json();
@@ -135,6 +148,23 @@ export class ApiService {
       body: formData,
     });
     if (!res.ok) throw await this.responseError('uploadScreenshot', res);
+  }
+
+  async uploadConsoleEntries(creds: DeviceCreds, entries: DeviceConsoleEntry[]): Promise<void> {
+    if (!entries.length) return;
+    const res = await fetch(`${this.base}/api/my/console`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${creds.token}`,
+      },
+      body: JSON.stringify({ entries }),
+    });
+    if (!res.ok) throw await this.responseError('uploadConsoleEntries', res);
+  }
+
+  apkDownloadUrl(downloadPath: string): string {
+    return new URL(downloadPath, `${this.base}/`).toString();
   }
 
   wsUrl(creds: DeviceCreds): string {

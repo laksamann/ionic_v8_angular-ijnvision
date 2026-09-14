@@ -5,10 +5,12 @@ import { App } from '@capacitor/app';
 import { IonicModule } from '@ionic/angular';
 import { AppStateService } from '../../services/app-state.service';
 import { ApiService } from '../../services/api.service';
+import type { DeviceConsoleEntry } from '../../services/api.service';
 import { KioskSocketService } from '../../services/kiosk-socket.service';
 import { StorageService } from '../../services/storage.service';
 import { KioskWebView } from '../../plugins/kiosk-webview.plugin';
 import { NetworkMonitor } from '../../plugins/network-monitor.plugin';
+import { AppUpdate } from '../../plugins/app-update.plugin';
 import type { NetworkStatus } from '../../plugins/network-monitor.plugin';
 import type { PluginListenerHandle } from '@capacitor/core';
 import type { Subscription } from 'rxjs';
@@ -16,6 +18,7 @@ import type { Command, DeviceConfig, HeartbeatPayload } from '../../models/types
 import { environment } from '../../../environments/environment';
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
+const CONSOLE_FLUSH_INTERVAL_MS = 3_000;
 const APP_SESSION_STARTED_AT = new Date().toISOString();
 const APP_SESSION_ID = globalThis.crypto?.randomUUID?.() ??
   `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -57,15 +60,18 @@ export class KioskPage implements OnInit, OnDestroy {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reloadTimer: ReturnType<typeof setInterval> | null = null;
   private screenshotTimer: ReturnType<typeof setInterval> | null = null;
+  private consoleFlushTimer: ReturnType<typeof setInterval> | null = null;
   private reloadInFlight = false;
   private screenshotInFlight = false;
   private appStartMs = Date.now();
   private listenerHandles: PluginListenerHandle[] = [];
   private subscriptions: Subscription[] = [];
-  private heartbeatInFlight = false;
+  private heartbeatRequestsInFlight = 0;
   private heartbeatSequence = 0;
   private heartbeatFailed = false;
   private appIsActive = true;
+  private consoleQueue: DeviceConsoleEntry[] = [];
+  private consoleUploadInFlight = false;
   private queuedHeartbeatOverride: Partial<
     Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>
   > | null = null;
@@ -109,6 +115,18 @@ export class KioskPage implements OnInit, OnDestroy {
         this.listenerHandles.push(
           await KioskWebView.addListener('pageLoadError', (data) => {
             console.log('[kiosk] page load error:', data.url, data.description);
+            this.queueConsoleEntry({
+              level: 'error',
+              message: `Page load failed: ${data.description}`,
+              source: data.url,
+              line: 0,
+              timestamp: Date.now(),
+            });
+          })
+        );
+        this.listenerHandles.push(
+          await KioskWebView.addListener('consoleMessage', (data) => {
+            this.queueConsoleEntry(data);
           })
         );
         await this.showUrl(initialUrl);
@@ -163,7 +181,12 @@ export class KioskPage implements OnInit, OnDestroy {
         this.appIsActive = isActive;
         if (!isActive) {
           void this.storage.setPendingDisconnectReason('app_backgrounded');
-          void this.tickHeartbeat({ appState: 'background', lastDisconnectReason: 'app_backgrounded' });
+          // Urgent + fetch keepalive makes the final lifecycle heartbeat much
+          // more likely to finish while Android is pausing the WebView.
+          void this.tickHeartbeat(
+            { appState: 'background', lastDisconnectReason: 'app_backgrounded' },
+            true
+          );
         } else {
           void this.tickHeartbeat({ appState: 'active' });
         }
@@ -180,6 +203,18 @@ export class KioskPage implements OnInit, OnDestroy {
     );
     this.socket.connect(this.api.wsUrl(creds));
 
+    this.queueConsoleEntry({
+      level: 'info',
+      message: `Kiosk app v${environment.appVersion} diagnostic session started`,
+      source: 'IonicApp',
+      line: 0,
+      timestamp: Date.now(),
+    });
+    this.consoleFlushTimer = setInterval(
+      () => void this.flushConsoleEntries(),
+      CONSOLE_FLUSH_INTERVAL_MS
+    );
+
     // Heartbeat: works even if the socket is momentarily down, and is how
     // the server marks the device "online" for the dashboard.
     this.tickHeartbeat();
@@ -191,6 +226,8 @@ export class KioskPage implements OnInit, OnDestroy {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.reloadTimer) clearInterval(this.reloadTimer);
     if (this.screenshotTimer) clearInterval(this.screenshotTimer);
+    if (this.consoleFlushTimer) clearInterval(this.consoleFlushTimer);
+    await this.flushConsoleEntries();
     for (const subscription of this.subscriptions) subscription.unsubscribe();
     if (!this.useIframeFallback) {
       try {
@@ -263,15 +300,16 @@ export class KioskPage implements OnInit, OnDestroy {
   }
 
   private async tickHeartbeat(
-    override: Partial<Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>> = {}
+    override: Partial<Pick<HeartbeatPayload, 'networkState' | 'appState' | 'lastDisconnectReason'>> = {},
+    urgent = false
   ): Promise<void> {
     const creds = this.appState.creds();
     if (!creds) return;
-    if (this.heartbeatInFlight) {
+    if (this.heartbeatRequestsInFlight > 0 && !urgent) {
       this.queuedHeartbeatOverride = { ...this.queuedHeartbeatOverride, ...override };
       return;
     }
-    this.heartbeatInFlight = true;
+    this.heartbeatRequestsInFlight += 1;
 
     try {
       const pendingReason = await this.storage.getPendingDisconnectReason();
@@ -295,7 +333,7 @@ export class KioskPage implements OnInit, OnDestroy {
         lastDisconnectReason: override.lastDisconnectReason ?? pendingReason,
         clientSentAt: new Date().toISOString(),
         sequence,
-      });
+      }, urgent);
       if (res.heartbeatAck.sequence !== sequence) {
         console.log('[kiosk] heartbeat ACK sequence mismatch:', res.heartbeatAck.sequence, sequence);
       }
@@ -314,8 +352,8 @@ export class KioskPage implements OnInit, OnDestroy {
       }
       console.log('[kiosk] heartbeat failed:', err);
     } finally {
-      this.heartbeatInFlight = false;
-      if (this.queuedHeartbeatOverride) {
+      this.heartbeatRequestsInFlight = Math.max(0, this.heartbeatRequestsInFlight - 1);
+      if (this.heartbeatRequestsInFlight === 0 && this.queuedHeartbeatOverride) {
         const queued = this.queuedHeartbeatOverride;
         this.queuedHeartbeatOverride = null;
         void this.tickHeartbeat(queued);
@@ -400,6 +438,18 @@ export class KioskPage implements OnInit, OnDestroy {
         case 'reboot_device':
         case 'shutdown_device':
           throw new Error(`${command.type} requires Android Device Owner provisioning`);
+        case 'install_apk': {
+          if (this.useIframeFallback) throw new Error('APK installation is only available on Android');
+          const downloadPath = command.payload['downloadPath'] as string;
+          const sha256 = command.payload['sha256'] as string;
+          if (!downloadPath || !sha256) throw new Error('install_apk requires downloadPath and sha256');
+          await AppUpdate.downloadAndInstall({
+            url: this.api.apkDownloadUrl(downloadPath),
+            token: creds.token,
+            sha256,
+          });
+          break;
+        }
       }
       this.socket.sendAck(command.id, 'acked');
       await this.api.ackCommand(creds, command.id, 'acked').catch(() => {});
@@ -491,6 +541,36 @@ export class KioskPage implements OnInit, OnDestroy {
       await this.api.uploadScreenshot(creds, base64);
     } finally {
       this.screenshotInFlight = false;
+    }
+  }
+
+  private queueConsoleEntry(entry: DeviceConsoleEntry): void {
+    this.consoleQueue.push({
+      level: String(entry.level || 'log').slice(0, 20),
+      message: String(entry.message || '').slice(0, 2000),
+      source: String(entry.source || '').slice(0, 500),
+      line: Number.isFinite(entry.line) ? entry.line : 0,
+      timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+    });
+    if (this.consoleQueue.length > 500) {
+      this.consoleQueue.splice(0, this.consoleQueue.length - 500);
+    }
+  }
+
+  private async flushConsoleEntries(): Promise<void> {
+    if (this.consoleUploadInFlight || !this.consoleQueue.length) return;
+    const creds = this.appState.creds();
+    if (!creds) return;
+
+    const batch = this.consoleQueue.splice(0, 50);
+    this.consoleUploadInFlight = true;
+    try {
+      await this.api.uploadConsoleEntries(creds, batch);
+    } catch {
+      this.consoleQueue.unshift(...batch);
+      if (this.consoleQueue.length > 500) this.consoleQueue.length = 500;
+    } finally {
+      this.consoleUploadInFlight = false;
     }
   }
 }

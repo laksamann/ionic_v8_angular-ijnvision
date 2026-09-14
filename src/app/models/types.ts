@@ -42,6 +42,7 @@ export type CommandType =
   | 'restart_app'
   | 'reboot_device'
   | 'shutdown_device'
+  | 'install_apk'
   | 'update_config'
   | 'play_sound';
 

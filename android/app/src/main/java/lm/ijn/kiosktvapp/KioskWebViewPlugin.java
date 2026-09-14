@@ -8,11 +8,13 @@ import android.webkit.SslErrorHandler;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebChromeClient;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -79,6 +81,11 @@ public class KioskWebViewPlugin extends Plugin {
   // overflowed instead of being contained.
   private static final int VIRTUAL_WIDTH_DP = 1920;
   private static final int VIRTUAL_HEIGHT_DP = 1080;
+  // Rendering above Full HD is expensive on lower-powered TV boxes and is
+  // then scaled back down anyway. Keep the web page's CSS viewport at 1920
+  // while capping the hardware surface to Full HD.
+  private static final int MAX_RENDER_WIDTH_PX = 1920;
+  private static final int MAX_RENDER_HEIGHT_PX = 1080;
 
   private float realWidthPx;
   private float realHeightPx;
@@ -95,8 +102,27 @@ public class KioskWebViewPlugin extends Plugin {
 
   private WebView ensureWebView() {
     if (kioskWebView == null) {
-      kioskWebView = new WebView(getContext());
+      kioskWebView = new WebView(getContext()) {
+        @Override
+        public boolean dispatchKeyEvent(KeyEvent event) {
+          if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_LEFT) {
+              KioskWebViewPlugin.this.moveCarousel(-1);
+              return true;
+            }
+            if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_RIGHT) {
+              KioskWebViewPlugin.this.moveCarousel(1);
+              return true;
+            }
+          }
+          return super.dispatchKeyEvent(event);
+        }
+      };
       kioskWebView.setBackgroundColor(android.graphics.Color.BLACK);
+      kioskWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        kioskWebView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+      }
       kioskWebView.getSettings().setJavaScriptEnabled(true);
       kioskWebView.getSettings().setDomStorageEnabled(true);
       kioskWebView.getSettings().setDatabaseEnabled(true);
@@ -135,6 +161,8 @@ public class KioskWebViewPlugin extends Plugin {
       kioskWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
       kioskWebView.setFocusable(true);
       kioskWebView.setFocusableInTouchMode(true);
+      kioskWebView.setHorizontalScrollBarEnabled(false);
+      kioskWebView.setVerticalScrollBarEnabled(false);
 
       android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
       getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(dm);
@@ -169,6 +197,17 @@ public class KioskWebViewPlugin extends Plugin {
           loadProgress.setVisibility(progress >= 100 ? View.GONE : View.VISIBLE);
           if (progress < 100) loadProgress.bringToFront();
         }
+
+        @Override
+        public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+          publishConsoleMessage(
+            consoleMessage.messageLevel().name().toLowerCase(),
+            consoleMessage.message(),
+            consoleMessage.sourceId(),
+            consoleMessage.lineNumber()
+          );
+          return true;
+        }
       });
       // Should already be the default for a FrameLayout-based content
       // view, but explicit rather than assumed — this is what makes
@@ -189,12 +228,13 @@ public class KioskWebViewPlugin extends Plugin {
     String url = call.getString("url");
     getActivity().runOnUiThread(() -> {
       WebView wv = ensureWebView();
-      if (url != null && !url.isEmpty()) {
+      if (url != null && !url.isEmpty() && !samePageUrl(url, wv.getUrl())) {
         lockedOrigin = originOf(url);
         wv.loadUrl(url);
       }
       wv.setVisibility(View.VISIBLE);
       wv.bringToFront();
+      wv.requestFocus(View.FOCUS_DOWN);
       if (loadProgress != null && loadProgress.getProgress() < 100) {
         loadProgress.setVisibility(View.VISIBLE);
         loadProgress.bringToFront();
@@ -331,8 +371,13 @@ public class KioskWebViewPlugin extends Plugin {
     if (kioskWebView == null) return;
 
     boolean swapped = (targetRotationDegrees == 90 || targetRotationDegrees == 270);
-    int layoutWidthPx = (int) ((swapped ? VIRTUAL_HEIGHT_DP : VIRTUAL_WIDTH_DP) * density);
-    int layoutHeightPx = (int) ((swapped ? VIRTUAL_WIDTH_DP : VIRTUAL_HEIGHT_DP) * density);
+    float desiredWidthPx = (swapped ? VIRTUAL_HEIGHT_DP : VIRTUAL_WIDTH_DP) * density;
+    float desiredHeightPx = (swapped ? VIRTUAL_WIDTH_DP : VIRTUAL_HEIGHT_DP) * density;
+    float maxWidthPx = swapped ? MAX_RENDER_HEIGHT_PX : MAX_RENDER_WIDTH_PX;
+    float maxHeightPx = swapped ? MAX_RENDER_WIDTH_PX : MAX_RENDER_HEIGHT_PX;
+    float renderScale = Math.min(1f, Math.min(maxWidthPx / desiredWidthPx, maxHeightPx / desiredHeightPx));
+    int layoutWidthPx = Math.max(1, Math.round(desiredWidthPx * renderScale));
+    int layoutHeightPx = Math.max(1, Math.round(desiredHeightPx * renderScale));
 
     fitScale = Math.min(
       realWidthPx / layoutWidthPx,
@@ -376,6 +421,76 @@ public class KioskWebViewPlugin extends Plugin {
     kioskWebView.evaluateJavascript(
       "(function(){document.documentElement.style.cursor='" + cursor +
         "';if(document.body){document.body.style.cursor='" + cursor + "';}})()",
+      null
+    );
+  }
+
+  /** Maps TV D-pad Left/Right to the common carousel APIs and controls used
+   * by Bootstrap, Swiper, Slick and generic accessible sliders. If no known
+   * carousel is present, the page receives a normal ArrowLeft/ArrowRight
+   * keyboard event so custom sites can handle it themselves. */
+  private void moveCarousel(int direction) {
+    if (kioskWebView == null) return;
+    String dir = direction < 0 ? "-1" : "1";
+    String key = direction < 0 ? "ArrowLeft" : "ArrowRight";
+    publishConsoleMessage("info", "Remote " + key + " received", "KioskWebView", 0);
+    kioskWebView.evaluateJavascript(
+      "(function(d){" +
+        "try{" +
+          "var handled=false,method='keyboard',root=null,visible=function(e){return !!(e&&e.getClientRects().length);};" +
+          "var roots=document.querySelectorAll('.carousel,.swiper,.swiper-container,.slick-slider,[role=\"region\"][aria-roledescription=\"carousel\"]');" +
+          "for(var i=0;i<roots.length;i++){if(visible(roots[i])){root=roots[i];break;}}" +
+          "if(root&&root.swiper){d<0?root.swiper.slidePrev():root.swiper.slideNext();handled=true;method='swiper';}" +
+          "if(!handled&&root&&root.slick&&typeof root.slick==='function'){root.slick(d<0?'slickPrev':'slickNext');handled=true;method='slick';}" +
+          "if(!handled){var selectors=d<0?'.carousel-control-prev,.swiper-button-prev,.slick-prev,[data-bs-slide=\"prev\"],[bs-slide=\"prev\"],[aria-label*=\"Previous\" i]':'.carousel-control-next,.swiper-button-next,.slick-next,[data-bs-slide=\"next\"],[bs-slide=\"next\"],[aria-label*=\"Next\" i]';" +
+            "var buttons=(root||document).querySelectorAll(selectors);for(var j=0;j<buttons.length;j++){if(visible(buttons[j])){buttons[j].click();handled=true;method='button-click';break;}}}" +
+          "if(!handled&&root&&window.bootstrap&&bootstrap.Carousel){var c=bootstrap.Carousel.getOrCreateInstance(root);d<0?c.prev():c.next();handled=true;method='bootstrap';}" +
+          "if(!handled){var k=d<0?'ArrowLeft':'ArrowRight',code=d<0?37:39,target=document.activeElement||document.body;" +
+            "var init={key:k,code:k,keyCode:code,which:code,bubbles:true,cancelable:true};" +
+            "target.dispatchEvent(new KeyboardEvent('keydown',init));document.dispatchEvent(new KeyboardEvent('keydown',init));window.dispatchEvent(new KeyboardEvent('keydown',init));" +
+            "target.dispatchEvent(new KeyboardEvent('keyup',init));}" +
+          "return JSON.stringify({ok:true,handled:handled,method:method,key:d<0?'ArrowLeft':'ArrowRight'});" +
+        "}catch(e){return JSON.stringify({ok:false,error:String(e),key:d<0?'ArrowLeft':'ArrowRight'});}" +
+      "})(" + dir + ")",
+      result -> publishConsoleMessage("debug", "Remote navigation result: " + result, "KioskWebView", 0)
+    );
+  }
+
+  private void publishConsoleMessage(String level, String message, String source, int line) {
+    JSObject data = new JSObject();
+    data.put("level", level == null ? "log" : level);
+    data.put("message", message == null ? "" : message);
+    data.put("source", source == null ? "" : source);
+    data.put("line", line);
+    data.put("timestamp", System.currentTimeMillis());
+    notifyListeners("consoleMessage", data, true);
+  }
+
+  private boolean samePageUrl(String requested, String current) {
+    if (requested == null || current == null) return false;
+    try {
+      Uri a = Uri.parse(requested);
+      Uri b = Uri.parse(current);
+      String pathA = a.getPath() == null ? "" : a.getPath().replaceAll("/+$", "");
+      String pathB = b.getPath() == null ? "" : b.getPath().replaceAll("/+$", "");
+      return String.valueOf(a.getScheme()).equalsIgnoreCase(String.valueOf(b.getScheme())) &&
+        String.valueOf(a.getHost()).equalsIgnoreCase(String.valueOf(b.getHost())) &&
+        a.getPort() == b.getPort() && pathA.equals(pathB) &&
+        String.valueOf(a.getQuery()).equals(String.valueOf(b.getQuery()));
+    } catch (Exception ignored) {
+      return requested.equals(current);
+    }
+  }
+
+  /** Removes the browser-default document gutter that otherwise appears as
+   * a white strip around pages without their own reset stylesheet. */
+  private void applyFullBleedPageStyle() {
+    if (kioskWebView == null) return;
+    kioskWebView.evaluateJavascript(
+      "(function(){var id='ijn-kiosk-full-bleed',s=document.getElementById(id);" +
+        "if(!s){s=document.createElement('style');s.id=id;s.textContent=" +
+        "'html,body{margin:0!important;padding:0!important;min-width:100%!important;min-height:100%!important;overflow-x:hidden!important;}';" +
+        "(document.head||document.documentElement).appendChild(s);}})()",
       null
     );
   }
@@ -426,14 +541,24 @@ public class KioskWebViewPlugin extends Plugin {
         Canvas canvas = new Canvas(bitmap);
         kioskWebView.draw(canvas);
 
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream);
-        String base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP);
-        bitmap.recycle();
+        // Drawing must happen on the UI thread, but JPEG compression and
+        // base64 conversion do not. Moving those expensive operations away
+        // prevents screenshot polling from freezing or flickering the page.
+        new Thread(() -> {
+          try {
+            ByteArrayOutputStream stream = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream);
+            String base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP);
+            bitmap.recycle();
 
-        JSObject result = new JSObject();
-        result.put("base64", base64);
-        call.resolve(result);
+            JSObject result = new JSObject();
+            result.put("base64", base64);
+            call.resolve(result);
+          } catch (Exception e) {
+            bitmap.recycle();
+            call.reject("screenshot encoding failed: " + e.getMessage());
+          }
+        }, "kiosk-screenshot-encoder").start();
       } catch (Exception e) {
         call.reject("screenshot capture failed: " + e.getMessage());
       }
@@ -465,6 +590,7 @@ public class KioskWebViewPlugin extends Plugin {
       // automatically). The virtual canvas remains full 1920x1080 so short
       // pages still occupy a real browser-sized viewport.
       applyCursorStyle();
+      applyFullBleedPageStyle();
       JSObject data = new JSObject();
       data.put("url", url);
       notifyListeners("pageLoadFinished", data);
